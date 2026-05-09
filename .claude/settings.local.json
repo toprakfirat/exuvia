@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find C:/Users/PC/Python/exuvia/node_modules/.pnpm/openclaw* -name \"plugin-entry.d.ts\")",
+      "Bash(curl -s http://127.0.0.1:11434/api/chat -d '{ *)",
+      "Read(//c/Users/PC/.openclaw/**)",
+      "Read(//c/Users/PC/.openclaw/workspace-mardak/**)",
+      "PowerShell(Get-ChildItem *)",
+      "PowerShell(Test-Path *)"
+    ]
+  }
+}

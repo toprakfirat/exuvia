@@ -1,0 +1,27 @@
+node_modules/
+dist/
+out/
+build/
+.vite/
+.turbo/
+
+# env / secrets
+.env
+.env.*
+!.env.example
+
+# editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# electron build outputs
+release/
+app/dist-electron/

@@ -1,0 +1,37 @@
+{
+  "name": "@exuvia/openclaw-plugin",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Exuvia plugin for OpenClaw: avatar play_animation tool and per-avatar config sidecar.",
+  "type": "module",
+  "files": [
+    "dist",
+    "src",
+    "openclaw.plugin.json",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json --watch",
+    "prepare": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "typebox": "1.1.37"
+  },
+  "devDependencies": {
+    "openclaw": "^2026.5.0",
+    "typescript": "^5.5.0"
+  },
+  "openclaw": {
+    "extensions": ["./src/index.ts"],
+    "runtimeExtensions": ["./dist/index.js"],
+    "compat": {
+      "pluginApi": ">=2026.3.24-beta.2",
+      "minGatewayVersion": "2026.3.24-beta.2"
+    },
+    "build": {
+      "openclawVersion": "2026.3.24-beta.2",
+      "pluginSdkVersion": "2026.3.24-beta.2"
+    }
+  }
+}

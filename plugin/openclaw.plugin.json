@@ -1,0 +1,71 @@
+{
+  "id": "exuvia",
+  "name": "Exuvia",
+  "description": "Character-first avatar layer for OpenClaw. Adds a play_animation tool driven by per-avatar animation catalogues.",
+  "activation": {
+    "onStartup": true
+  },
+  "enabledByDefault": true,
+  "contracts": {
+    "tools": ["play_animation"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "avatars": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "// note": "Schema is intentionally permissive — the desktop app owns the avatar shape and evolves it independently. Claw stores whatever the app puts here.",
+          "additionalProperties": true,
+          "properties": {
+            "avatarPath": {
+              "type": "string",
+              "description": "Path to the avatar model file (.fbx, .glb, or .gltf). The desktop app picks the loader by extension."
+            },
+            "fbxPath": {
+              "type": "string",
+              "description": "Legacy alias for avatarPath. Both are accepted; avatarPath wins when both are set."
+            },
+            "fbxScale": {
+              "type": "number",
+              "description": "Model scale. Default depends on format (0.01 for fbx, 1.0 for glb)."
+            },
+            "voiceOnChannels": {
+              "type": "boolean",
+              "description": "If true, attach a TTS voice note on every outbound message delivered to chat channels (Telegram/WhatsApp/iMessage/Discord). Default false. Voice still plays in the desktop app regardless."
+            },
+            "postProcessing": {
+              "type": "object",
+              "additionalProperties": true,
+              "description": "Optional per-avatar post-processing config consumed by the desktop app. Schema is owned by exuvia-app, not validated here so the app can evolve effects independently."
+            },
+            "animations": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "name": { "type": "string" },
+                  "description": { "type": "string" },
+                  "tags": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  },
+                  "loop": { "type": "boolean" },
+                  "durationMs": { "type": "number" },
+                  "gifPath": {
+                    "type": "string",
+                    "description": "Optional path to a pre-rendered gif/webp/mp4 of this clip. Attached as MEDIA on chat-channel deliveries so users on Telegram/Discord/etc. see the animation."
+                  }
+                },
+                "required": ["name"]
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

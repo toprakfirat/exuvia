@@ -1,0 +1,1174 @@
+/* exuvia — design language ported from ai-assistant.
+   Black gradient field, full-screen 3D scene, floating frosted-glass UI on top.
+   Sharp 2px corners, 12-13px text, soft pastel tints for chat bubbles. */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+:root {
+  color-scheme: dark;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto",
+    "Helvetica Neue", sans-serif;
+  --bg-glass: rgba(255, 255, 255, 0.05);
+  --bg-glass-strong: rgba(255, 255, 255, 0.1);
+  --border-glass: rgba(255, 255, 255, 0.12);
+  --border-glass-strong: rgba(255, 255, 255, 0.22);
+  --text-primary: rgba(255, 255, 255, 0.92);
+  --text-secondary: rgba(255, 255, 255, 0.6);
+  --text-muted: rgba(255, 255, 255, 0.35);
+  --ai-tint: rgba(130, 130, 255, 0.08);
+  --ai-tint-border: rgba(130, 130, 255, 0.18);
+  --user-tint: rgba(255, 180, 130, 0.1);
+  --user-tint-border: rgba(255, 180, 130, 0.2);
+  /* UI geometry knobs — overridden per-avatar from settings (avatar.ui).
+     See App.jsx where avatar.ui values are translated into inline CSS
+     variables on .app-shell. */
+  --chat-width: 820px;
+  --bubble-radius: 2px;
+  --bubble-padding: 8px 12px;
+  --bubble-font-size: 12px;
+  --button-radius: 2px;
+  --accent: rgba(130, 130, 255, 0.6);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--font);
+  font-size: 13px;
+  color: var(--text-primary);
+  background: linear-gradient(135deg, #000 0%, #0a0a12 100%);
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Subtle radial vignette around the edges to anchor the scene. */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(
+    circle at center,
+    transparent 45%,
+    rgba(0, 0, 0, 0.25) 70%,
+    rgba(0, 0, 0, 0.85) 95%
+  );
+  z-index: 50;
+}
+
+#root {
+  width: 100vw;
+  height: 100vh;
+  position: relative;
+}
+
+/* === keyframes === */
+@keyframes slideIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* === app shell ===
+   Scene fills the window. Picker floats top, chat overlays bottom. */
+.app-shell {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.scene {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+}
+
+.scene .scene-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 13px;
+  pointer-events: none;
+}
+
+/* === picker (bottom-center drawer, slides up from below) ===
+   Sits where the chat bar normally lives, same width. Acts as the single
+   surface for avatar selection, camera control, and (when an avatar's
+   settings are opened) the avatar settings UI.
+
+   Toggle button sits to the LEFT of the chat composer, baseline-aligned
+   with it (same `bottom: 60px`). Computed as: viewport center minus half
+   the chat width minus a small gap. */
+/* Bottom bar: [icon-controls][chat]. Sits where the chat used to live.
+   When the camera is unlocked the chat hides but the controls remain so
+   the user can re-lock. Pure flex — no absolute positioning math. */
+.bottom-bar {
+  position: fixed;
+  bottom: 60px;
+  left: 50%;
+  transform: translateX(-50%);
+  /* Width: --chat-width is the user-configured chat width (default 820);
+     +60 leaves room for the lock/toggle button column on the left. The
+     calc gracefully falls back to the viewport on narrow screens. */
+  width: min(calc(var(--chat-width) + 60px), calc(100% - 24px));
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  z-index: 90;
+  pointer-events: none;
+}
+
+/* Inside the bar, the chat must shrink so it shares space with the
+   controls instead of pushing them off-screen. Override the standalone
+   sizing it had as a free-floating element. */
+.bottom-bar .chat {
+  position: static;
+  transform: none;
+  width: auto;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.composer-controls {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 0 0 auto;
+  pointer-events: auto;
+}
+
+.composer-icon-btn {
+  /* 18×18 squares so two stacked + a 2px gap = 38px, matching the chat
+     composer input's height (~40px). */
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-glass);
+  backdrop-filter: blur(20px);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--button-radius);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.composer-icon-btn svg {
+  /* Cap the icon size in case a caller passes a larger size — keeps
+     the lock icon clearly inside the 18px square. */
+  width: 11px;
+  height: 11px;
+}
+.composer-icon-btn:hover {
+  background: var(--bg-glass-strong);
+  border-color: var(--border-glass-strong);
+  color: var(--text-primary);
+}
+.composer-icon-btn.active {
+  color: var(--text-primary);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.picker {
+  position: fixed;
+  bottom: 60px;
+  /* Align with the chat's slot inside .bottom-bar — same width, same
+     center-x — so the drawer covers the chat but NOT the always-visible
+     button column to the chat's left. The bar is `[18px buttons][6px
+     gap][chat]`, centered. Chat's center sits 12px right of viewport
+     center; chat width = bar width - 24px. */
+  left: calc(50% + 12px);
+  transform: translate(-50%, calc(100% + 80px));
+  width: min(calc(var(--chat-width) + 36px), calc(100% - 48px));
+  /* Height is set inline by AgentPicker (user-resizable, persisted in
+     localStorage). The fallback below is only used if React fails to
+     mount the inline style for some reason. */
+  height: 420px;
+  max-height: calc(100vh - 100px);
+  display: flex;
+  flex-direction: column;
+  background: rgba(15, 15, 22, 0.85);
+  backdrop-filter: blur(28px);
+  border: 1px solid var(--border-glass);
+  border-radius: 2px;
+  z-index: 100;
+  transition: transform 0.25s ease, opacity 0.2s ease;
+  opacity: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.picker.open {
+  transform: translate(-50%, 0);
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Top-edge drag handle for vertical resizing. Sits along the full top
+   edge of the drawer, slightly taller than 1px so it's easy to grab. A
+   subtle accent stripe appears on hover/drag so the affordance is
+   discoverable without cluttering the resting UI. */
+.picker-resize {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 6px;
+  cursor: ns-resize;
+  z-index: 4;
+  background: transparent;
+  transition: background 0.15s ease;
+}
+.picker-resize::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 2px;
+  width: 36px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--border-glass);
+  transform: translateX(-50%);
+  transition: background 0.15s ease;
+}
+.picker-resize:hover::after,
+.picker-resize:active::after {
+  background: var(--accent);
+}
+
+@media (max-width: 1024px) {
+  .picker {
+    /* Leave a 44px gutter on the LEFT for the camera-lock + panel-toggle
+       button column, plus a 16px gutter on the right. The picker slides
+       up over the chat (ok — chat hides when picker is open) but must
+       NOT cover the always-visible button column, otherwise the user
+       has no way to close the picker. */
+    width: calc(100% - 60px);
+    left: auto;
+    right: 16px;
+    transform: translate(0, calc(100% + 80px));
+  }
+  .picker.open {
+    transform: translate(0, 0);
+  }
+}
+
+/* Body — the swappable region under the top bar. Default view (avatar
+   list) needs padding + scroll. Settings view fills edge-to-edge so
+   AvatarSettings owns its own internal layout. */
+.picker-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 12px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+.picker-body-settings {
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
+}
+
+.picker-section-title {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-muted);
+  padding: 4px 2px 2px;
+  border-bottom: 1px solid var(--border-glass);
+  margin-bottom: 4px;
+}
+
+.picker-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+}
+
+.picker .agent-pill {
+  font: inherit;
+  font-size: 13px;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-primary);
+  border: 1px solid var(--border-glass);
+  border-radius: 2px;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease;
+  text-align: left;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.picker .agent-pill:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: var(--border-glass-strong);
+}
+
+.picker .agent-pill.active {
+  background: rgba(130, 130, 255, 0.14);
+  border-color: rgba(130, 130, 255, 0.45);
+  color: rgba(220, 225, 255, 1);
+}
+
+.picker .agent-pill:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.picker .picker-action {
+  flex: 0 0 auto;
+  width: 30px;
+  padding: 8px 0;
+  font-size: 12px;
+  text-align: center;
+}
+
+.picker .picker-create {
+  margin-top: auto;
+  padding: 8px 12px;
+  border-style: dashed;
+  text-align: center;
+  cursor: pointer;
+  color: var(--text-secondary);
+}
+.picker .picker-create:hover {
+  color: var(--text-primary);
+}
+
+/* === chat overlay (floats bottom) ===
+   The messages container masks its top edge so scrolled-out messages fade
+   smoothly into transparency rather than getting clipped at a hard line. */
+.chat {
+  position: fixed;
+  bottom: 60px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(820px, calc(100% - 320px));
+  max-height: 60vh;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 90;
+  pointer-events: none;
+}
+
+@media (max-width: 1024px) {
+  .chat {
+    width: calc(100% - 32px);
+  }
+}
+
+.chat .messages {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  overflow-y: auto;
+  padding: 64px 6px 18px;
+  pointer-events: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  /* Vertical fade: fully transparent at the top 56px, fully opaque past it. */
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    rgba(0, 0, 0, 0.4) 24px,
+    rgba(0, 0, 0, 0.85) 64px,
+    #000 96px
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    rgba(0, 0, 0, 0.4) 24px,
+    rgba(0, 0, 0, 0.85) 64px,
+    #000 96px
+  );
+}
+
+/* Hide the scrollbar entirely — feels cleaner with the fade-out mask. */
+.chat .messages::-webkit-scrollbar {
+  display: none;
+}
+
+.chat .msg {
+  max-width: 80%;
+  padding: var(--bubble-padding);
+  font-size: var(--bubble-font-size);
+  line-height: 1.5;
+  backdrop-filter: blur(20px);
+  color: var(--text-primary);
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  animation: slideIn 0.25s ease-out;
+  pointer-events: auto;
+  white-space: pre-wrap;
+}
+
+.chat .msg.assistant {
+  align-self: flex-start;
+  background: var(--ai-tint);
+  border: 1px solid var(--ai-tint-border);
+  /* Tail-corner stays sharp on the bottom-left; the other three corners
+     follow the user's roundness setting. */
+  border-radius: var(--bubble-radius) var(--bubble-radius) var(--bubble-radius) 0;
+}
+
+.chat .msg.user {
+  align-self: flex-end;
+  background: var(--user-tint);
+  border: 1px solid var(--user-tint-border);
+  border-radius: var(--bubble-radius) var(--bubble-radius) 0 var(--bubble-radius);
+}
+
+.chat .msg.tool {
+  align-self: flex-start;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px dashed rgba(255, 255, 255, 0.18);
+  color: var(--text-muted);
+  font-family: ui-monospace, "SFMono-Regular", "Cascadia Mono", Menlo, monospace;
+  font-size: 11px;
+  border-radius: 2px;
+  max-width: 90%;
+}
+
+.chat .msg.system,
+.chat .msg.unknown {
+  align-self: center;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-style: italic;
+  font-size: 11px;
+  text-align: center;
+  max-width: 400px;
+  backdrop-filter: none;
+}
+
+/* Inline markdown formatting inside chat bubbles. Renders the common
+   emphases models use (`*italic*`, `**bold**`, `` `code` ``, `~~strike~~`). */
+.chat .msg em {
+  font-style: italic;
+  /* Slight color shift so emphasis reads on the tinted-glass bubble bg. */
+  color: rgba(255, 255, 255, 0.98);
+}
+.chat .msg strong {
+  font-weight: 600;
+  color: rgba(255, 255, 255, 1);
+}
+.chat .msg del {
+  text-decoration: line-through;
+  text-decoration-color: rgba(255, 255, 255, 0.4);
+  color: rgba(255, 255, 255, 0.55);
+}
+.chat .msg code {
+  font-family: ui-monospace, "SFMono-Regular", "Cascadia Mono", Menlo, monospace;
+  font-size: 0.92em;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: rgba(220, 230, 255, 0.95);
+}
+
+/* composer = the floating input bar. Lives below chat overlay. */
+.chat .composer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  pointer-events: auto;
+}
+
+.chat .composer input {
+  flex: 1;
+  padding: 10px 14px;
+  background: rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(20px);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--button-radius);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+  transition: border-color 0.2s ease, background 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.chat .composer input::placeholder {
+  color: rgba(255, 255, 255, 0.25);
+}
+
+.chat .composer input:focus {
+  border-color: var(--border-glass-strong);
+  background: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 0 24px rgba(255, 255, 255, 0.06);
+}
+
+.chat .composer button {
+  padding: 10px 18px;
+  background: rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(20px);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--button-radius);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.chat .composer button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.16);
+  border-color: var(--border-glass-strong);
+}
+
+.chat .composer button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* === bottom status strip === */
+.status-strip {
+  position: fixed;
+  bottom: 8px;
+  left: 12px;
+  right: 12px;
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--text-muted);
+  z-index: 80;
+  pointer-events: none;
+  font-family: ui-monospace, "SFMono-Regular", "Cascadia Mono", Menlo, monospace;
+  letter-spacing: 0.4px;
+}
+
+/* === buttons (general) === */
+button {
+  font: inherit;
+  font-size: 12px;
+  background: rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(10px);
+  color: var(--text-primary);
+  border: 1px solid var(--border-glass);
+  border-radius: 2px;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.14);
+  border-color: var(--border-glass-strong);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* === inputs (general — settings, modals) === */
+input,
+textarea,
+select {
+  font: inherit;
+  font-size: 12px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+  border: 1px solid var(--border-glass);
+  border-radius: 2px;
+  padding: 8px 10px;
+  width: 100%;
+  outline: none;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  border-color: var(--border-glass-strong);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+input[type="checkbox"] {
+  width: auto;
+  padding: 0;
+  cursor: pointer;
+}
+
+input[type="range"] {
+  padding: 0;
+  background: transparent;
+  border: none;
+}
+
+/* === tabbed settings ===
+   Renders inline inside .picker (the bottom drawer). The component fills
+   the drawer; positioning is owned by the parent. */
+.settings-inline {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+.settings-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--border-glass);
+}
+
+.settings-header h2 {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.settings-tabs {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 0;
+  padding: 0 14px;
+  background: rgba(0, 0, 0, 0.18);
+  border-bottom: 1px solid var(--border-glass);
+  overflow-x: auto;
+  /* Visible (but slim) scrollbar so users can tell tabs are scrollable on
+     narrow screens. Was hidden — that's how tabs disappeared off-screen. */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+.settings-tabs::-webkit-scrollbar {
+  height: 6px;
+}
+.settings-tabs::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+}
+.settings-tabs::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.settings-tab {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  border-bottom: 2px solid transparent;
+  padding: 9px 14px;
+  font-size: 11px;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+  white-space: nowrap;
+}
+
+.settings-tab:hover {
+  color: var(--text-secondary);
+}
+
+.settings-tab.active {
+  color: var(--text-primary);
+  border-bottom-color: rgba(130, 130, 255, 0.7);
+}
+
+.settings-tab.danger {
+  color: rgba(255, 154, 154, 0.5);
+  margin-left: auto;
+}
+.settings-tab.danger:hover {
+  color: rgba(255, 154, 154, 0.85);
+}
+.settings-tab.danger.active {
+  color: rgba(255, 154, 154, 1);
+  border-bottom-color: rgba(255, 90, 90, 0.75);
+}
+
+.settings-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 16px 18px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+
+/* Range inputs default to a wide intrinsic min-width that overflowed the
+   panel. Force them to shrink to their grid/flex slot. */
+.settings-panel input[type="range"] {
+  min-width: 0;
+  width: 100%;
+}
+
+/* === slick range sliders ===
+   Thin track, small monochrome thumb, subtle filled portion using the
+   browser-supported gradient-from-value trick. The accent-color fallback
+   covers Firefox + Chrome's native color cleanly. */
+.settings-panel input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  border: none;
+  border-radius: 2px;
+  outline: none;
+  accent-color: rgba(130, 130, 255, 0.7);
+  cursor: pointer;
+}
+
+.settings-panel input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: rgba(220, 225, 255, 0.95);
+  border: 1px solid rgba(130, 130, 255, 0.6);
+  cursor: grab;
+  transition: transform 0.1s ease;
+}
+.settings-panel input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.18);
+}
+.settings-panel input[type="range"]:active::-webkit-slider-thumb {
+  cursor: grabbing;
+}
+.settings-panel input[type="range"]::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: rgba(220, 225, 255, 0.95);
+  border: 1px solid rgba(130, 130, 255, 0.6);
+  cursor: grab;
+}
+
+/* === clean checkboxes === */
+/* Custom square checkbox — shared by settings panel and the wizard modal.
+   Uses appearance: none so we get the same look across browsers / OS. */
+.settings-panel input[type="checkbox"],
+.modal input[type="checkbox"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--border-glass-strong);
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.04);
+  cursor: pointer;
+  position: relative;
+  transition: border-color 0.15s ease, background 0.15s ease;
+  margin: 0;
+  flex-shrink: 0;
+  /* Nudge down ~2px so the box's center sits on the cap-height of the
+     first line of label text — keeps the box on the same row as the
+     first line, even when the label wraps onto multiple lines. */
+  margin-top: 2px;
+}
+.settings-panel input[type="checkbox"]:hover,
+.modal input[type="checkbox"]:hover {
+  border-color: rgba(130, 130, 255, 0.55);
+}
+.settings-panel input[type="checkbox"]:checked,
+.modal input[type="checkbox"]:checked {
+  background: rgba(130, 130, 255, 0.6);
+  border-color: rgba(130, 130, 255, 0.8);
+}
+.settings-panel input[type="checkbox"]:checked::after,
+.modal input[type="checkbox"]:checked::after {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 0px;
+  width: 5px;
+  height: 9px;
+  border: solid #fff;
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg);
+}
+
+/* Force long single-line content (file paths, etc.) to wrap inside the panel
+   instead of pushing the modal width. */
+.settings-panel input[type="text"],
+.settings-panel input[type="password"],
+.settings-panel input[type="number"] {
+  min-width: 0;
+  width: 100%;
+}
+.settings-panel code {
+  word-break: break-all;
+}
+
+.settings-footer {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 16px;
+  background: rgba(0, 0, 0, 0.3);
+  border-top: 1px solid var(--border-glass);
+  gap: 8px;
+}
+
+/* Compact inputs/labels for the dense settings tabs. */
+.settings-panel .field {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.settings-panel .field-stacked {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.settings-panel .field > label,
+.settings-panel .field-stacked > label,
+.settings-panel .field-label {
+  font-size: 11px;
+  letter-spacing: 0.4px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+.settings-panel input[type="text"],
+.settings-panel input[type="number"],
+.settings-panel input[type="password"],
+.settings-panel select,
+.settings-panel textarea {
+  padding: 5px 8px;
+  font-size: 11px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-glass);
+  border-radius: 2px;
+}
+
+.settings-panel input[type="text"]:focus,
+.settings-panel input[type="number"]:focus,
+.settings-panel input[type="password"]:focus,
+.settings-panel textarea:focus {
+  border-color: rgba(130, 130, 255, 0.45);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.settings-panel button {
+  padding: 4px 10px;
+  font-size: 11px;
+  letter-spacing: 0.4px;
+}
+
+.settings-panel .section-title {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.7px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin: 14px 0 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border-glass);
+}
+
+.settings-panel .section-title:first-child {
+  margin-top: 0;
+}
+
+.settings-panel .row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.settings-panel .checkbox-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+.settings-panel .checkbox-row input[type="checkbox"] {
+  margin-top: 2px;
+}
+.settings-panel .checkbox-row strong {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.settings-panel .anim-card {
+  border: 1px solid var(--border-glass);
+  border-radius: 2px;
+  padding: 8px 10px;
+  margin-bottom: 6px;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 4px;
+  font-size: 11px;
+}
+
+.settings-panel .anim-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 11px;
+}
+.settings-panel .anim-card-head strong {
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+/* === UI tab preview ===
+   Inline mockup of chat bubbles inside the settings panel. Inherits the
+   same CSS vars that style the real chat (--bubble-radius, --bubble-
+   padding, --ai-tint, etc.) — but those vars can be locally overridden
+   on .ui-preview itself so the preview tracks the user's edits even
+   when the live chat is hidden behind the settings drawer. */
+.ui-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 12px;
+  margin-bottom: 8px;
+  border: 1px solid var(--border-glass);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.ui-preview-msg {
+  max-width: 80%;
+  padding: var(--bubble-padding);
+  font-size: var(--bubble-font-size);
+  line-height: 1.5;
+  color: var(--text-primary);
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  white-space: pre-wrap;
+}
+
+.ui-preview-msg.assistant {
+  align-self: flex-start;
+  background: var(--ai-tint);
+  border: 1px solid var(--ai-tint-border);
+  border-radius: var(--bubble-radius) var(--bubble-radius) var(--bubble-radius) 0;
+}
+
+.ui-preview-msg.user {
+  align-self: flex-end;
+  background: var(--user-tint);
+  border: 1px solid var(--user-tint-border);
+  border-radius: var(--bubble-radius) var(--bubble-radius) 0 var(--bubble-radius);
+}
+
+.settings-panel .danger-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid rgba(255, 90, 90, 0.25);
+  border-radius: 2px;
+  background: rgba(255, 90, 90, 0.04);
+  margin-bottom: 10px;
+}
+.settings-panel .danger-row strong {
+  color: rgba(255, 154, 154, 1);
+  font-size: 12px;
+}
+
+/* === dropzone (CreatorWizard model picker) ===
+   Dashed-border target that highlights on drag-over and shows the
+   selected file's metadata once chosen. Whole area is clickable. */
+.dropzone {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 160px;
+  padding: 24px 20px;
+  border: 1.5px dashed var(--border-glass-strong);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease,
+    color 0.15s ease;
+  outline: none;
+}
+.dropzone:hover {
+  border-color: var(--accent);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-primary);
+}
+.dropzone:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+.dropzone.is-over {
+  border-style: solid;
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--text-primary);
+}
+.dropzone.has-file {
+  border-style: solid;
+  border-color: var(--border-glass-strong);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.dropzone-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  text-align: center;
+}
+.dropzone-icon {
+  color: var(--text-muted);
+  margin-bottom: 2px;
+  display: flex;
+}
+.dropzone.is-over .dropzone-icon,
+.dropzone.has-file .dropzone-icon {
+  color: var(--accent);
+}
+.dropzone-headline {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  letter-spacing: 0.2px;
+}
+.dropzone-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  word-break: break-all;
+  max-width: 100%;
+}
+.dropzone-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  letter-spacing: 0.3px;
+}
+.dropzone-warn {
+  margin-top: 4px;
+  font-size: 11px;
+  color: rgba(255, 176, 112, 1);
+}
+.dropzone-replace {
+  margin-top: 6px;
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* === modals === */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: fadeIn 0.15s ease-out;
+}
+
+.modal {
+  background: rgba(15, 15, 22, 0.85);
+  backdrop-filter: blur(40px);
+  border: 1px solid var(--border-glass);
+  border-radius: 2px;
+  padding: 22px;
+  width: 480px;
+  max-width: 92vw;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
+  animation: slideIn 0.2s ease-out;
+}
+
+.modal h2 {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  margin: 0;
+}
+
+.modal h3 {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.modal label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.muted {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+code {
+  font-family: ui-monospace, "SFMono-Regular", "Cascadia Mono", Menlo, monospace;
+  font-size: 11px;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 1px 5px;
+  border-radius: 2px;
+  border: 1px solid var(--border-glass);
+}
+
+a {
+  color: rgba(180, 200, 255, 0.85);
+  text-decoration: none;
+  transition: color 0.2s ease;
+}
+a:hover {
+  color: rgba(220, 230, 255, 1);
+}
