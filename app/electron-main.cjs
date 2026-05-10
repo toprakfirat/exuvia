@@ -776,6 +776,76 @@ async function ensurePluginInstalled() {
   });
 }
 
+// Make sure openclaw will accept WS connections from the Electron
+// renderer. The gateway's controlUi origin check rejects anything not
+// in the allowedOrigins list, and Electron's renderer presents one of
+// three origins depending on how it's running:
+//   - http://localhost:5173  (dev: vite dev server)
+//   - file://                (packaged: loadFile)
+//   - app://.                (packaged with custom protocol)
+// We add all three. Idempotent: re-running on a config that already
+// has them is a no-op. We also turn on allowInsecureAuth so the
+// shared-secret-from-localhost path works without TLS.
+const REQUIRED_ALLOWED_ORIGINS = [
+  "http://localhost:5173",
+  "file://",
+  "app://.",
+];
+async function ensureGatewayAcceptsApp() {
+  const home = require("node:os").homedir();
+  const cfgPath = path.join(home, ".openclaw", "openclaw.json");
+  if (!fs.existsSync(cfgPath)) {
+    return { ok: false, reason: "openclaw.json not found", patched: false };
+  }
+  let raw;
+  try {
+    raw = await fs.promises.readFile(cfgPath, "utf8");
+  } catch (err) {
+    return { ok: false, reason: `read failed: ${String(err?.message ?? err)}`, patched: false };
+  }
+  let cfg;
+  try {
+    cfg = JSON.parse(raw);
+  } catch (err) {
+    return { ok: false, reason: `parse failed: ${String(err?.message ?? err)}`, patched: false };
+  }
+
+  cfg.gateway = cfg.gateway ?? {};
+  cfg.gateway.controlUi = cfg.gateway.controlUi ?? {};
+
+  let changed = false;
+  if (cfg.gateway.controlUi.allowInsecureAuth !== true) {
+    cfg.gateway.controlUi.allowInsecureAuth = true;
+    changed = true;
+  }
+  const existing = Array.isArray(cfg.gateway.controlUi.allowedOrigins)
+    ? cfg.gateway.controlUi.allowedOrigins
+    : [];
+  const merged = existing.slice();
+  for (const o of REQUIRED_ALLOWED_ORIGINS) {
+    if (!merged.includes(o)) {
+      merged.push(o);
+      changed = true;
+    }
+  }
+  if (changed) cfg.gateway.controlUi.allowedOrigins = merged;
+
+  if (!changed) return { ok: true, patched: false };
+
+  // Write back. Keep 2-space indent because that's what openclaw's own
+  // wizard writes, and we want diffs to stay clean.
+  try {
+    await fs.promises.writeFile(cfgPath, JSON.stringify(cfg, null, 2), "utf8");
+  } catch (err) {
+    return { ok: false, reason: `write failed: ${String(err?.message ?? err)}`, patched: false };
+  }
+  return { ok: true, patched: true, addedOrigins: REQUIRED_ALLOWED_ORIGINS.filter((o) => !existing.includes(o)) };
+}
+
+// Renderer can trigger the patch on demand (e.g. retry button in the
+// connection-error UI). Same return shape as the boot-time call.
+ipcMain.handle("exuvia:openclaw:ensureAcceptsApp", () => ensureGatewayAcceptsApp());
+
 // Renderer can ask for the current plugin-install status (e.g. to show
 // a banner if it's missing). Re-runs the same check the boot path uses.
 ipcMain.handle("exuvia:plugin:status", async () => {
@@ -805,6 +875,22 @@ app.whenReady().then(async () => {
     }
   } catch (err) {
     console.warn("[plugin] auto-install threw:", err);
+  }
+  // Make sure openclaw's controlUi will accept WS connections from us.
+  // First-launch users don't have our origins in their allowedOrigins
+  // list and the gateway rejects the handshake with "origin not
+  // allowed". This patch is idempotent so it's safe to run every boot.
+  try {
+    const r = await ensureGatewayAcceptsApp();
+    if (r.ok && r.patched) {
+      console.log(
+        `[gateway] patched openclaw.json controlUi.allowedOrigins (added ${(r.addedOrigins ?? []).join(", ")}); restart the gateway for the change to take effect`,
+      );
+    } else if (!r.ok) {
+      console.warn("[gateway] could not patch controlUi:", r.reason);
+    }
+  } catch (err) {
+    console.warn("[gateway] controlUi patch threw:", err);
   }
   // Restore the user's saved toggle hotkey (if any) so it's live from
   // boot. Failures are non-fatal — the user can rebind from the UI.

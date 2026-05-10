@@ -24,10 +24,33 @@ export default function SetupModal({ initial, onSave, onClose, mode = "setup" })
     setBusy(true);
     setTestResult(null);
     try {
+      // Before the first probe, make sure openclaw's controlUi will
+      // accept our origin. The IPC is a no-op if the config is
+      // already correct; if it patches anything, the user has to
+      // restart the gateway for the change to take effect — which
+      // we surface in the failure message below.
+      let patchedThisRun = false;
+      try {
+        const r = await window.exuvia?.openclaw?.ensureAcceptsApp?.();
+        patchedThisRun = Boolean(r?.patched);
+      } catch {
+        /* non-fatal */
+      }
       const result = await testGatewayConnection({
         url: gatewayUrl.trim(),
         sharedSecret: sharedSecret.trim(),
       });
+      // If the connection was rejected with an origin error AND we
+      // just patched the config, we know the gateway hasn't reloaded
+      // yet — annotate the result so humanError can suggest a
+      // gateway restart.
+      if (
+        !result.ok &&
+        /origin not allowed/i.test(result.error ?? "") &&
+        patchedThisRun
+      ) {
+        result.kind = "origin-needs-restart";
+      }
       setTestResult(result);
     } finally {
       setBusy(false);
@@ -147,7 +170,15 @@ function humanError(result) {
       return `the gateway rejected the token. Check your shared secret. (${result.error})`;
     case "timeout":
       return "no response from the gateway after 6 seconds.";
+    case "origin-needs-restart":
+      return "exuvia just updated your openclaw.json so the gateway accepts this app, but the running gateway hasn't picked it up yet. Stop and restart the gateway (run `openclaw gateway` in your terminal), then try again.";
     default:
+      // If the raw error mentions origin and we didn't patch this run,
+      // the user's config is missing the entries — surface a short
+      // hint pointing at the troubleshooting section.
+      if (/origin not allowed/i.test(result.error ?? "")) {
+        return `${result.error} — restart the openclaw gateway to pick up the latest config.`;
+      }
       return result.error || "unknown error";
   }
 }

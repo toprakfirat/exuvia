@@ -301,4 +301,4 @@ milestone), users clone and run `pnpm dev:electron`.
 
 ## License
 
-[insert your license here]
+Apache License 2.0 — see [LICENSE](./LICENSE).

@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld("exuvia", {
   openclaw: {
     audioProviders: () => ipcRenderer.invoke("exuvia:openclaw:audioProviders"),
     authSet: (args) => ipcRenderer.invoke("exuvia:openclaw:authSet", args),
+    ensureAcceptsApp: () => ipcRenderer.invoke("exuvia:openclaw:ensureAcceptsApp"),
   },
   fbx: {
     write: (args) => ipcRenderer.invoke("exuvia:fbx:write", args),
