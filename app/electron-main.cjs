@@ -47,6 +47,104 @@ ipcMain.handle("exuvia:token:set", (_e, token) => {
   return true;
 });
 
+// Transcribe a recorded audio blob via the openclaw CLI. The renderer
+// captures with MediaRecorder (typically webm/opus), sends bytes here,
+// we write to a temp file and shell out to `openclaw audio transcribe
+// --file <tmp> --json`, then parse the result. Requires the user to
+// have configured an audio transcription provider in openclaw.json
+// (deepgram, openai, groq, etc.) — we surface the CLI's error verbatim
+// when no provider is configured.
+ipcMain.handle("exuvia:audio:transcribe", async (_e, args) => {
+  const bytes = args?.bytes;
+  const ext = typeof args?.ext === "string" && /^[a-z0-9]{1,8}$/i.test(args.ext)
+    ? args.ext
+    : "webm";
+  if (!bytes) return { ok: false, error: "bytes required" };
+
+  const os = require("node:os");
+  const { spawn } = require("node:child_process");
+
+  // Write the blob to a temp file under the OS temp dir. We delete it
+  // after the CLI finishes so failed transcriptions don't accumulate.
+  const tmpName = `exuvia-rec-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+  const tmpPath = path.join(os.tmpdir(), tmpName);
+  try {
+    await fs.promises.writeFile(tmpPath, Buffer.from(bytes));
+  } catch (err) {
+    return { ok: false, error: `tmp write failed: ${String(err?.message ?? err)}` };
+  }
+
+  // openclaw is on PATH for users who installed it via the standard
+  // installer. If the spawn fails with ENOENT we surface a clear error
+  // pointing at the install path.
+  const result = await new Promise((resolve) => {
+    let stdout = "";
+    let stderr = "";
+    // The audio CLI lives under the `capability` (alias `infer`)
+    // namespace in this build of openclaw — `openclaw audio …` was the
+    // older shape and now errors with "Unknown command".
+    const proc = spawn(
+      "openclaw",
+      ["capability", "audio", "transcribe", "--file", tmpPath, "--json"],
+      { shell: true },
+    );
+    proc.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+    proc.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    proc.on("error", (err) => {
+      resolve({ ok: false, error: `spawn failed: ${String(err?.message ?? err)}` });
+    });
+    proc.on("close", (code) => {
+      // The CLI prints "No transcript returned …" to stderr even when it
+      // exits 1, so prefer stderr over exit code for the user-facing
+      // message. If both stderr and stdout are empty just report the
+      // exit code so we don't return silent failures.
+      if (code !== 0) {
+        const msg = stderr.trim() || stdout.trim() || `exit ${code}`;
+        resolve({ ok: false, error: msg });
+        return;
+      }
+      try {
+        const parsed = JSON.parse(stdout);
+        const text = parsed?.outputs?.[0]?.text ?? parsed?.text ?? "";
+        const trimmed = typeof text === "string" ? text.trim() : "";
+        if (!trimmed) {
+          // Empty transcript on exit 0 usually means a provider isn't
+          // configured (the CLI fell through silently). Surface this
+          // explicitly so the user knows to configure groq/openai/etc.
+          resolve({
+            ok: false,
+            error:
+              "Empty transcript. No audio transcription provider is configured — set tools.media.audio.models in openclaw.json and `openclaw auth set <provider>:default --api-key …`.",
+          });
+          return;
+        }
+        resolve({ ok: true, text: trimmed });
+      } catch (err) {
+        resolve({
+          ok: false,
+          error: `parse failed: ${String(err?.message ?? err)}; stdout=${stdout.slice(0, 200)}`,
+        });
+      }
+    });
+  });
+
+  // Only clean up the temp file on success. On failure we keep the file
+  // around (and report the path) so the user can play it back, inspect
+  // it with ffprobe, or curl it at the transcription provider directly
+  // to figure out whether it's an empty/silent recording vs. a provider
+  // problem.
+  if (result.ok) {
+    fs.promises.unlink(tmpPath).catch(() => {});
+  } else {
+    result.tempPath = tmpPath;
+  }
+  return result;
+});
+
 // Read a local audio file (e.g. the audioPath returned by tts.convert) and
 // hand it back to the renderer as base64 so it can be played as a Blob URL.
 // Loopback-only by design — we don't expose arbitrary file reads.
@@ -181,6 +279,22 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
     },
+  });
+
+  // Auto-grant microphone access for the voice-input feature. We're a
+  // single-origin Electron app pointing at our own bundled HTML — there's
+  // no third-party page that could request the mic. On Windows the OS-
+  // level permission prompt still gates this; we just don't add a second
+  // gate on top of it.
+  win.webContents.session.setPermissionRequestHandler((_wc, permission, cb) => {
+    if (permission === "media" || permission === "audioCapture") {
+      cb(true);
+      return;
+    }
+    cb(false);
+  });
+  win.webContents.session.setPermissionCheckHandler((_wc, permission) => {
+    return permission === "media" || permission === "audioCapture";
   });
 
   if (process.env.VITE_DEV_SERVER_URL) {

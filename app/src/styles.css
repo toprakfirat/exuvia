@@ -96,6 +96,44 @@ body::after {
   z-index: 1;
 }
 
+/* Small badge shown in the top-right of the scene while a non-idle
+   animation is playing. Disappears when the avatar settles back into
+   an idle. Pure visual cue — doesn't intercept clicks. */
+.gesture-indicator {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  color: var(--text-primary);
+  background: rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  pointer-events: none;
+  z-index: 10;
+  animation: slideIn 0.2s ease-out;
+}
+
+.gesture-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #6cf;
+  box-shadow: 0 0 8px rgba(102, 204, 255, 0.7);
+  animation: gesture-pulse 1.4s infinite ease-in-out;
+}
+
+@keyframes gesture-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.8); }
+}
+
 .scene .scene-empty {
   position: absolute;
   inset: 0;
@@ -448,6 +486,58 @@ body::after {
   border-radius: var(--bubble-radius) var(--bubble-radius) 0 var(--bubble-radius);
 }
 
+/* Typing indicator: an assistant-styled bubble with three dots that
+   fade in sequence. Shown while we're waiting for the assistant's
+   first reply chunk. Inherits all .msg + .msg.assistant styling so it
+   matches real bubbles in size, padding, tint, and corner shape. */
+.chat .msg.typing {
+  display: inline-flex;
+  align-items: center;
+  /* The dots are smaller than text — center them in the same line-box
+     as a regular bubble would have so the bubble isn't visibly taller
+     or shorter than message bubbles. */
+  line-height: 1;
+  min-height: calc(var(--bubble-font-size) * 1.5);
+  /* Don't let the bubble shrink to a tiny strip — give it enough width
+     to read as a proper assistant bubble. */
+  min-width: 48px;
+  justify-content: center;
+}
+
+.typing-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.typing-dots span {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--text-primary);
+  opacity: 0.4;
+  animation: typing-bounce 1.2s infinite ease-in-out both;
+}
+
+.typing-dots span:nth-child(2) {
+  animation-delay: 0.18s;
+}
+
+.typing-dots span:nth-child(3) {
+  animation-delay: 0.36s;
+}
+
+@keyframes typing-bounce {
+  0%, 60%, 100% {
+    transform: translateY(0);
+    opacity: 0.35;
+  }
+  30% {
+    transform: translateY(-3px);
+    opacity: 0.9;
+  }
+}
+
 .chat .msg.tool {
   align-self: flex-start;
   background: rgba(255, 255, 255, 0.04);
@@ -553,6 +643,49 @@ body::after {
 .chat .composer button:disabled {
   opacity: 0.4;
   cursor: default;
+}
+
+/* Mic button — sits between the text input and the Send button. Square
+   so it reads as an icon, not a primary action. Tints red while live so
+   the user can tell at a glance when the mic is hot. */
+.chat .composer button.mic-btn {
+  padding: 0;
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  flex: 0 0 auto;
+}
+
+.chat .composer button.mic-btn.recording {
+  background: rgba(255, 80, 80, 0.18);
+  border-color: rgba(255, 80, 80, 0.55);
+  color: #ffd9d9;
+  animation: mic-pulse 1.2s infinite ease-in-out;
+}
+
+.chat .composer button.mic-btn.transcribing {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.chat .composer button.mic-btn.error {
+  border-color: rgba(255, 154, 154, 0.6);
+  color: rgba(255, 200, 200, 0.9);
+}
+
+@keyframes mic-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 80, 80, 0.45); }
+  50% { box-shadow: 0 0 0 6px rgba(255, 80, 80, 0); }
+}
+
+.voice-error {
+  font-size: 10px;
+  color: rgba(255, 154, 154, 0.85);
+  padding: 4px 6px;
+  margin-top: 2px;
+  pointer-events: auto;
 }
 
 /* === bottom status strip === */

@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld("exuvia", {
   },
   audio: {
     readBase64: (filePath) => ipcRenderer.invoke("exuvia:audio:readBase64", filePath),
+    transcribe: (args) => ipcRenderer.invoke("exuvia:audio:transcribe", args),
   },
   fbx: {
     write: (args) => ipcRenderer.invoke("exuvia:fbx:write", args),

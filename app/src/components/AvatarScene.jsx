@@ -95,14 +95,30 @@ function signatureFor(cfg) {
   return `${quality}:${parts.join("|")}`;
 }
 
-function pickIdleClip(animations) {
-  if (!animations || animations.length === 0) return null;
-  const lower = animations.map((c) => c.name.toLowerCase());
-  for (const hint of IDLE_HINTS) {
-    const idx = lower.findIndex((n) => n.includes(hint));
-    if (idx >= 0) return animations[idx];
+// Find every clip that could serve as an idle (looped breathing/standing).
+// We accept any clip whose name matches a hint OR which was tagged loop=true
+// in the catalogue. Returning a pool (instead of a single pick) lets us
+// rotate idles for variety — see pickIdleVariant below.
+function pickIdlePool(animations) {
+  if (!animations || animations.length === 0) return [];
+  const matches = [];
+  for (const a of animations) {
+    const lower = a.name.toLowerCase();
+    const isHinted = IDLE_HINTS.some((h) => lower.includes(h));
+    if (isHinted || a.loop) matches.push(a);
   }
-  return animations[0];
+  if (matches.length > 0) return matches;
+  // Fallback: nothing tagged as idle — use the first clip so the avatar
+  // at least animates rather than freezing on bind pose.
+  return [animations[0]];
+}
+
+// Pick an idle from the pool, avoiding `previous` if there's a choice.
+function pickIdleVariant(pool, previous) {
+  if (!pool || pool.length === 0) return null;
+  if (pool.length === 1) return pool[0];
+  const others = pool.filter((a) => a !== previous);
+  return others[Math.floor(Math.random() * others.length)];
 }
 
 const AvatarScene = forwardRef(function AvatarScene(
@@ -144,6 +160,10 @@ const AvatarScene = forwardRef(function AvatarScene(
     postProcessing,
     onLoad,
     onError,
+    // Fires whenever the active clip changes. Receives { name, loop, isIdle }
+    // or null when stopping. The bottom-bar UI uses this to show a "now
+    // playing" indicator for non-idle animations.
+    onAnimationChange,
   },
   ref,
 ) {
@@ -171,8 +191,27 @@ const AvatarScene = forwardRef(function AvatarScene(
   const customLightsRef = useRef(new Map());
   const clockRef = useRef(new THREE.Clock());
   const animationsRef = useRef([]); // { name, clip, action, duration, loop }
-  const idleActionRef = useRef(null);
+  const idlePoolRef = useRef([]); // every idle-eligible entry from the catalogue
+  const idleActionRef = useRef(null); // currently-playing idle (latest pick)
   const currentActionRef = useRef(null);
+  // Latest onAnimationChange callback, kept in a ref so we don't have to
+  // re-bind crossfadeTo when the prop identity changes.
+  const onAnimationChangeRef = useRef(null);
+  useEffect(() => {
+    onAnimationChangeRef.current = onAnimationChange;
+  }, [onAnimationChange]);
+  function emitAnimationChange(entry) {
+    if (!entry) {
+      onAnimationChangeRef.current?.(null);
+      return;
+    }
+    const isIdle = idlePoolRef.current.includes(entry);
+    onAnimationChangeRef.current?.({
+      name: entry.name,
+      loop: entry.loop,
+      isIdle,
+    });
+  }
   const animationFrameRef = useRef(null);
   const oneShotTimerRef = useRef(null);
   const enabledSignatureRef = useRef("");
@@ -197,6 +236,17 @@ const AvatarScene = forwardRef(function AvatarScene(
           loop: a.loop,
         }));
       },
+      // Returns the currently-playing entry's metadata, or null if nothing is
+      // playing or only an idle is playing. Callers (like the on-canvas
+      // indicator) use this to decide whether to show a "now playing" badge.
+      getCurrentAnimation() {
+        const cur = currentActionRef.current;
+        if (!cur) return null;
+        const entry = animationsRef.current.find((a) => a.action === cur);
+        if (!entry) return null;
+        const isIdle = idlePoolRef.current.includes(entry);
+        return { name: entry.name, loop: entry.loop, isIdle };
+      },
       playAnimation(name) {
         const entry = animationsRef.current.find(
           (a) => a.name.toLowerCase() === String(name ?? "").toLowerCase(),
@@ -209,10 +259,15 @@ const AvatarScene = forwardRef(function AvatarScene(
         return true;
       },
       stop() {
-        const idleAction = idleActionRef.current;
-        if (!idleAction || currentActionRef.current === idleAction) return;
-        const idleEntry = animationsRef.current.find((a) => a.action === idleAction);
-        if (idleEntry) crossfadeTo(idleEntry);
+        if (idlePoolRef.current.length === 0) return;
+        const previousEntry = animationsRef.current.find(
+          (a) => a.action === idleActionRef.current,
+        );
+        const nextIdle = pickIdleVariant(idlePoolRef.current, previousEntry);
+        if (nextIdle && nextIdle.action !== currentActionRef.current) {
+          crossfadeTo(nextIdle);
+          idleActionRef.current = nextIdle.action;
+        }
       },
     }),
     [],
@@ -902,11 +957,14 @@ const AvatarScene = forwardRef(function AvatarScene(
         });
         animationsRef.current = entries;
 
-        const idle = pickIdleClip(entries);
+        const idlePool = pickIdlePool(entries);
+        idlePoolRef.current = idlePool;
+        const idle = pickIdleVariant(idlePool, null);
         if (idle) {
           idle.action.reset().fadeIn(CROSSFADE_MS / 1000).play();
           idleActionRef.current = idle.action;
           currentActionRef.current = idle.action;
+          emitAnimationChange(idle);
         }
 
         setStatus("ready");
@@ -942,6 +1000,7 @@ const AvatarScene = forwardRef(function AvatarScene(
       mixerRef.current?.stopAllAction();
       mixerRef.current = null;
       animationsRef.current = [];
+      idlePoolRef.current = [];
       idleActionRef.current = null;
       currentActionRef.current = null;
       clearTimeout(oneShotTimerRef.current);
@@ -978,24 +1037,36 @@ const AvatarScene = forwardRef(function AvatarScene(
       next.fadeIn(fadeSec).play();
     }
     currentActionRef.current = next;
+    emitAnimationChange(entry);
 
     clearTimeout(oneShotTimerRef.current);
-    if (!entry.loop && idleActionRef.current && idleActionRef.current !== next) {
+    if (!entry.loop && idlePoolRef.current.length > 0 && currentActionRef.current === next) {
       // Schedule a return to idle. Start the crossfade BEFORE the clip
       // would otherwise end so the blend completes right around the
       // clip's natural end pose — landing on a still moment instead of
       // mid-action. We aim for `fadeStart = duration - fadeSec`.
+      //
+      // Pick a *different* idle than the one we just left (when there's
+      // more than one in the pool) so the avatar doesn't always settle
+      // back into the same loop. This is what gives the character a
+      // sense of life between explicit gestures.
       const ms = Math.max(50, entry.duration * 1000 - CROSSFADE_MS);
+      const previousEntry = animationsRef.current.find(
+        (a) => a.action === idleActionRef.current,
+      );
+      const nextIdleEntry = pickIdleVariant(idlePoolRef.current, previousEntry);
       oneShotTimerRef.current = setTimeout(() => {
-        const idle = idleActionRef.current;
-        if (!idle || currentActionRef.current !== next) return;
-        idle.enabled = true;
-        idle.setEffectiveTimeScale(1);
-        idle.setEffectiveWeight(1);
-        idle.time = 0;
-        idle.play();
-        next.crossFadeTo(idle, fadeSec, true);
-        currentActionRef.current = idle;
+        if (!nextIdleEntry || currentActionRef.current !== next) return;
+        const idleAction = nextIdleEntry.action;
+        idleAction.enabled = true;
+        idleAction.setEffectiveTimeScale(1);
+        idleAction.setEffectiveWeight(1);
+        idleAction.time = 0;
+        idleAction.play();
+        next.crossFadeTo(idleAction, fadeSec, true);
+        currentActionRef.current = idleAction;
+        idleActionRef.current = idleAction;
+        emitAnimationChange(nextIdleEntry);
       }, ms);
     }
   }

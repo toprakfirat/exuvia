@@ -21,6 +21,9 @@ export default function App() {
   // Camera lock — locked = chat in front, controls off. Unlocked = chat
   // hidden, orbit controls live so user can frame the avatar.
   const [cameraLocked, setCameraLocked] = useState(true);
+  // Currently-playing non-idle animation, surfaced as an on-canvas badge.
+  // Null when nothing or only an idle is playing.
+  const [activeGesture, setActiveGesture] = useState(null);
   // Unsaved settings-panel edits that the scene should preview live. Cleared
   // when the panel closes or saves.
   const [previewAvatar, setPreviewAvatar] = useState(null);
@@ -72,6 +75,12 @@ export default function App() {
     sceneRef.current?.stop?.();
   }, [activeAgentId, ttsSkip]);
 
+  // Same-clip cooldown enforced both gateway-side (in animation-tool.ts) and
+  // here so what the user sees matches what the tool actually executes. Keep
+  // the same window length on both sides.
+  const ANIMATION_COOLDOWN_MS = 8_000;
+  const lastPlayedRef = useRef(new Map());
+
   // When the agent emits a tool call, route play_animation to the scene.
   const handleToolCall = useCallback((payload) => {
     const name = payload?.toolName ?? payload?.name;
@@ -79,8 +88,16 @@ export default function App() {
     const args = payload?.params ?? payload?.args ?? {};
     const target = typeof args.name === "string" ? args.name : null;
     if (!target) return;
+    const cooldownKey = `${activeAgentId ?? "?"}:${target.toLowerCase()}`;
+    const now = Date.now();
+    const last = lastPlayedRef.current.get(cooldownKey) ?? 0;
+    if (now - last < ANIMATION_COOLDOWN_MS) {
+      // Suppressed locally to match the gateway-side cooldown.
+      return;
+    }
+    lastPlayedRef.current.set(cooldownKey, now);
     sceneRef.current?.playAnimation?.(target);
-  }, []);
+  }, [activeAgentId]);
 
   // Speak newly-finished assistant messages. Streaming behavior is best-effort
   // for v1: we wait until a message is marked complete, then speak the whole
@@ -231,28 +248,39 @@ export default function App() {
       />
       <div className="scene">
         {avatar?.avatarPath ? (
-          <AvatarScene
-            ref={sceneRef}
-            avatarPath={avatar.avatarPath}
-            scale={avatar.fbxScale}
-            environmentHdriPath={avatar.environmentHdriPath ?? null}
-            environmentIntensity={
-              avatar.environmentIntensity != null ? avatar.environmentIntensity : 1.0
-            }
-            backgroundIntensity={
-              avatar.backgroundIntensity != null ? avatar.backgroundIntensity : 0.3
-            }
-            lightsIntensity={
-              avatar.lightsIntensity != null ? avatar.lightsIntensity : 1.0
-            }
-            lights={avatar.lights}
-            scenePath={avatar.scenePath ?? null}
-            environmentScale={
-              avatar.environmentScale != null ? avatar.environmentScale : 1.0
-            }
-            postProcessing={avatar.postProcessing ?? null}
-            cameraLocked={cameraLocked}
-          />
+          <>
+            <AvatarScene
+              ref={sceneRef}
+              avatarPath={avatar.avatarPath}
+              scale={avatar.fbxScale}
+              environmentHdriPath={avatar.environmentHdriPath ?? null}
+              environmentIntensity={
+                avatar.environmentIntensity != null ? avatar.environmentIntensity : 1.0
+              }
+              backgroundIntensity={
+                avatar.backgroundIntensity != null ? avatar.backgroundIntensity : 0.3
+              }
+              lightsIntensity={
+                avatar.lightsIntensity != null ? avatar.lightsIntensity : 1.0
+              }
+              lights={avatar.lights}
+              scenePath={avatar.scenePath ?? null}
+              environmentScale={
+                avatar.environmentScale != null ? avatar.environmentScale : 1.0
+              }
+              postProcessing={avatar.postProcessing ?? null}
+              cameraLocked={cameraLocked}
+              onAnimationChange={(info) => {
+                setActiveGesture(info && !info.isIdle ? info : null);
+              }}
+            />
+            {activeGesture ? (
+              <div className="gesture-indicator" aria-hidden>
+                <span className="gesture-dot" />
+                {activeGesture.name}
+              </div>
+            ) : null}
+          </>
         ) : (
           <div className="scene-empty">
             {activeAgentId

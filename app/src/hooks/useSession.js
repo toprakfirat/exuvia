@@ -187,8 +187,31 @@ function pickContentText(m) {
   return "";
 }
 
+// Collapse all whitespace runs to a single space so two copies of the
+// same logical message — one raw, one re-rendered with markdown-style
+// numbered-list double-spacing — compare as equal during dedupe. The
+// rendered text is unchanged; this is only used for comparison keys.
+function normWs(s) {
+  return typeof s === "string" ? s.replace(/\s+/g, " ").trim() : "";
+}
+
 function mergeMessage(prev, msg) {
   if (!msg) return prev;
+  // Streaming-control envelopes carry only routing fields (runId,
+  // sessionKey, seq, state) and no role / content / text. Don't store
+  // them — they have nothing to display and would either render as
+  // empty bubbles or as raw JSON if anything downstream stringifies
+  // them as a fallback.
+  const isControlEnvelope =
+    !msg.role &&
+    !msg.message &&
+    typeof msg.content !== "string" &&
+    !Array.isArray(msg.content) &&
+    typeof msg.text !== "string" &&
+    (typeof msg.state === "string" ||
+      typeof msg.runId === "string" ||
+      typeof msg.seq === "number");
+  if (isControlEnvelope) return prev;
   const id = pickId(msg);
 
   // (1) Merge-by-id when we have one AND the same id is already in
@@ -214,27 +237,33 @@ function mergeMessage(prev, msg) {
   //      row or other event interleaved between the two copies).
   const role = pickRole(msg);
   const text = pickContentText(msg);
+  const normText = normWs(text);
   if (role && text && prev.length > 0) {
-    // Case (a) — only checked against the very last row.
+    // Case (a) — only checked against the very last row. Use normalized
+    // text so whitespace-only differences (markdown reformatting between
+    // event families) don't defeat the prefix check.
     const last = prev[prev.length - 1];
     if (pickRole(last) === role) {
       const lastText = pickContentText(last);
+      const normLast = normWs(lastText);
       if (
-        lastText &&
-        text.length > lastText.length &&
-        text.startsWith(lastText)
+        normLast &&
+        normText.length > normLast.length &&
+        normText.startsWith(normLast)
       ) {
         const next = prev.slice();
         next[prev.length - 1] = { ...last, ...msg };
         return next;
       }
     }
-    // Case (b) — exact text match scan over the recent same-role rows.
+    // Case (b) — normalized text match scan over the recent same-role
+    // rows. Catches the cross-family duplicate emission where one copy
+    // has reformatted whitespace.
     const scanFrom = Math.max(0, prev.length - 3);
     for (let i = prev.length - 1; i >= scanFrom; i--) {
       const candidate = prev[i];
       if (pickRole(candidate) !== role) continue;
-      if (pickContentText(candidate) === text) {
+      if (normWs(pickContentText(candidate)) === normText) {
         const next = prev.slice();
         next[i] = { ...candidate, ...msg };
         return next;

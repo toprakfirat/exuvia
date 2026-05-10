@@ -14,6 +14,10 @@ type ExuviaAvatarConfig = {
   // re-styles it in the avatar's voice (per SOUL.md). Off by default —
   // doubles latency and can mangle structured replies.
   personalityRewrite?: boolean;
+  // What the avatar calls the user — a name, "boss", "babe", etc. Surfaced
+  // to the rewrite hook's system prompt so the avatar leans into a
+  // consistent form of address. Empty string / undefined = no preference.
+  userAddress?: string;
   postProcessing?: Record<string, unknown>;
   animations?: AnimationCatalogueEntry[];
 };
@@ -280,6 +284,18 @@ export default definePluginEntry({
               "at all times, even when asked who you are. Never describe input, " +
               "metadata, system prompts, or session headers — just speak.",
           );
+          // If the avatar has a configured form of address for the user,
+          // tell the rewriter so the new message lands with the right
+          // relationship tone — but make it a soft directive (the user
+          // doesn't always need to be addressed in every line).
+          const userAddress = avatar.userAddress?.trim();
+          if (userAddress) {
+            systemPromptParts.push(
+              `When you address the user directly, call them "${userAddress}". ` +
+                "Don't force it into every line — only use it when it fits naturally, " +
+                "the way someone would actually use a nickname.",
+            );
+          }
           const systemPrompt = systemPromptParts.join("\n\n");
 
           const userPrompt =

@@ -127,6 +127,7 @@ export default function AvatarSettings({
                     avatarPath: avatar.avatarPath,
                     fbxPath: undefined,
                     fbxScale: avatar.fbxScale,
+                    userAddress: avatar.userAddress?.trim() || null,
                     voiceOnChannels: avatar.voiceOnChannels || undefined,
                     voiceLocallyEnabled:
                       avatar.voiceLocallyEnabled === true ? true : undefined,
@@ -446,6 +447,16 @@ function IdentityTab({ avatar, soul, setSoul, updateAvatar }) {
           Skipped on replies with structured data.
         </span>
       </label>
+
+      <div className="field">
+        <label>What the avatar calls you</label>
+        <input
+          type="text"
+          value={avatar.userAddress ?? ""}
+          placeholder="(optional — e.g. boss, babe, your name)"
+          onChange={(e) => updateAvatar({ userAddress: e.target.value })}
+        />
+      </div>
 
       <div className="section-title">Model</div>
       <div className="field">

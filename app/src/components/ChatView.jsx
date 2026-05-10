@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useSession } from "../hooks/useSession.js";
+import { useVoiceInput } from "../hooks/useVoiceInput.js";
 
 export default function ChatView({ gateway, agentId, onToolCall, onMessages }) {
   const sessionKey = agentId ? `agent:${agentId}:main` : null;
@@ -15,11 +16,14 @@ export default function ChatView({ gateway, agentId, onToolCall, onMessages }) {
   const [draft, setDraft] = useState("");
   const scrollRef = useRef(null);
 
+  // Track latest role so the scroll effect also fires when the typing
+  // bubble appears/disappears (which doesn't change messages.length).
+  const latestRole = messages[messages.length - 1]?.role ?? null;
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages.length]);
+  }, [messages.length, latestRole]);
 
   if (!agentId) {
     return (
@@ -43,6 +47,28 @@ export default function ChatView({ gateway, agentId, onToolCall, onMessages }) {
     }
   };
 
+  // Voice input. The transcript is auto-sent (no manual confirmation step)
+  // so a hold-to-talk session feels conversational. If the user has typed
+  // something into the composer already, we append the transcript instead
+  // of stomping it.
+  const voice = useVoiceInput({
+    onTranscript: async (text) => {
+      const merged = draft.trim() ? `${draft.trim()} ${text}` : text;
+      setDraft("");
+      try {
+        await send(merged);
+      } catch (err) {
+        console.error("voice send failed", err);
+      }
+    },
+  });
+
+  const toggleVoice = () => {
+    if (voice.state === "recording") voice.stop();
+    else if (voice.state === "transcribing") return;
+    else voice.start();
+  };
+
   // Display-time dedupe. The gateway emits the same logical message
   // multiple times across event families (session.message + chat) and
   // streaming chunks for one assistant turn arrive as separate rows.
@@ -58,19 +84,29 @@ export default function ChatView({ gateway, agentId, onToolCall, onMessages }) {
     const rawText = pickText(m);
     const text = rawText ? scrubAssistantText(rawText) : "";
     if (!text) continue;
+    const norm = text.replace(/\s+/g, " ").trim();
     const prev = displayed[displayed.length - 1];
     if (prev && prev.role === role) {
-      // Same role as the previous displayed bubble. If the new text
-      // is identical OR the new is a strict prefix-extension of the
-      // previous, replace the previous (keep the longer copy). If the
-      // previous is a prefix of the new, also replace.
-      if (text === prev.text) continue;
-      if (text.startsWith(prev.text)) {
+      // Same role as the previous displayed bubble. Compare on
+      // whitespace-normalized text so two copies of the same logical
+      // message that differ only in markdown-list spacing collapse to
+      // one bubble. Keep the longer rendered copy.
+      const prevNorm = prev.norm ?? prev.text.replace(/\s+/g, " ").trim();
+      if (norm === prevNorm) {
+        if (text.length > prev.text.length) {
+          prev.text = text;
+          prev.norm = norm;
+          prev.key = m.id ?? m.messageId ?? prev.key;
+        }
+        continue;
+      }
+      if (norm.startsWith(prevNorm)) {
         prev.text = text;
+        prev.norm = norm;
         prev.key = m.id ?? m.messageId ?? prev.key;
         continue;
       }
-      if (prev.text.startsWith(text)) {
+      if (prevNorm.startsWith(norm)) {
         // new is a shortened earlier emission of the same growing
         // message — drop it.
         continue;
@@ -79,9 +115,17 @@ export default function ChatView({ gateway, agentId, onToolCall, onMessages }) {
     displayed.push({
       role,
       text,
+      norm,
       key: m.id ?? m.messageId ?? `i:${displayed.length}`,
     });
   }
+
+  // Show a typing indicator when the latest displayed bubble is from
+  // the user — meaning we've sent something and the assistant reply
+  // hasn't arrived yet. Once the first assistant chunk lands, the
+  // newest bubble flips to assistant and the indicator disappears.
+  const lastDisplayed = displayed[displayed.length - 1];
+  const isThinking = lastDisplayed?.role === "user";
 
   return (
     <div className="chat">
@@ -93,17 +137,58 @@ export default function ChatView({ gateway, agentId, onToolCall, onMessages }) {
             {renderInlineMarkdown(m.text)}
           </div>
         ))}
+        {isThinking && (
+          <div className="msg assistant typing">
+            <span className="typing-dots">
+              <span />
+              <span />
+              <span />
+            </span>
+          </div>
+        )}
       </div>
       <form className="composer" onSubmit={submit}>
         <input
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          placeholder={`Message ${agentId}…`}
+          placeholder={
+            voice.state === "recording"
+              ? "Listening…"
+              : voice.state === "transcribing"
+                ? "Transcribing…"
+                : `Message ${agentId}…`
+          }
+          disabled={voice.state === "recording" || voice.state === "transcribing"}
         />
-        <button type="submit" disabled={!draft.trim()}>
+        <button
+          type="button"
+          className={`mic-btn ${voice.state}`}
+          onClick={toggleVoice}
+          disabled={voice.state === "transcribing"}
+          title={
+            voice.state === "recording"
+              ? "Stop recording"
+              : voice.state === "transcribing"
+                ? "Transcribing…"
+                : voice.state === "error"
+                  ? `Voice error: ${voice.error}`
+                  : "Hold to talk"
+          }
+        >
+          {voice.state === "recording" ? "■" : voice.state === "transcribing" ? "…" : "🎤"}
+        </button>
+        <button
+          type="submit"
+          disabled={!draft.trim() || voice.state === "recording" || voice.state === "transcribing"}
+        >
           Send
         </button>
       </form>
+      {voice.state === "error" && voice.error && (
+        <div className="voice-error">
+          voice: {voice.error}
+        </div>
+      )}
     </div>
   );
 }
@@ -116,7 +201,11 @@ function pickText(m) {
       .join("");
   }
   if (typeof m.text === "string") return m.text;
-  return JSON.stringify(m);
+  // Streaming-control frames (e.g. {runId, sessionKey, seq, state:"final"})
+  // have no displayable content. Returning the JSON of the envelope
+  // would render protocol metadata as a chat bubble — drop them by
+  // returning empty so the consumer's `if (!text) continue;` skips them.
+  return "";
 }
 
 // Patterns that small/mid local models emit alongside the actual reply
@@ -147,6 +236,15 @@ const SCRUB_PATTERNS = [
   /<function_call>[\s\S]*?<\/function_call>/gi,
   /\[play_animation:\s*[a-zA-Z0-9_-]+\s*\]/gi,
   /\[\[(?:reply_to_current|reply_to[^\]]*|audio_as_voice|[a-z_]+)\]\]/gi,
+  // openclaw's "no-reply" sentinel. The model is instructed to emit
+  // exactly `NO_REPLY` when it has nothing to say; the gateway is
+  // supposed to suppress the message entirely or replace it with a
+  // fallback, but we've seen the raw sentinel (and a truncated form
+  // `NO_RE`) leak through. Strip the full token AND any 4+-char prefix
+  // of it that's standing alone, so the user never sees the protocol
+  // string.
+  /\bNO_REPLY\b/g,
+  /^\s*NO_RE(?:P(?:LY?)?)?\s*$/i,
   // Stage directions, two flavors:
   //   (a) parenthetical that opens with a common acting verb
   //       — "(Stops posturing...)", "(Looks down...)"

@@ -57,6 +57,96 @@ the wording of your replies, NOT to how you reason about facts or work.
 
 const STEPS = ["model", "identity", "personality", "animations", "bake", "scene", "commit"];
 
+// Common clip names get pre-filled descriptions and tags so the model has
+// concrete cues to match against. Users can edit on the animations step;
+// unknown names start blank. Keys are lowercased clip names.
+const ANIMATION_DEFAULTS = {
+  wave: {
+    description: "Wave hello or goodbye. Play on greetings (hi, hello, hey, yo, hii) and farewells (bye, cya, later).",
+    tags: ["greeting", "hello", "goodbye", "wave"],
+  },
+  hello: {
+    description: "Greet the user. Play when the conversation opens or the user says hi/hello/hey.",
+    tags: ["greeting", "hello"],
+  },
+  hi: {
+    description: "Greet the user. Play when the user says hi/hello/hey.",
+    tags: ["greeting", "hello"],
+  },
+  greet: {
+    description: "Greet the user. Play on greetings.",
+    tags: ["greeting", "hello"],
+  },
+  bye: {
+    description: "Wave goodbye. Play on farewells (bye, cya, later, goodnight).",
+    tags: ["farewell", "goodbye"],
+  },
+  goodbye: {
+    description: "Wave goodbye. Play on farewells.",
+    tags: ["farewell", "goodbye"],
+  },
+  dance: {
+    description: "Dance — playful, excited, celebratory. Play when asked to dance, when celebrating, or in upbeat playful moments.",
+    tags: ["happy", "playful", "celebrate", "excited", "dance"],
+  },
+  idle: {
+    description: "Default standing idle. The avatar plays this on its own when nothing else is happening — DO NOT call this tool with `idle`.",
+    tags: ["idle", "default"],
+  },
+  point: {
+    description: "Point at something. Play when calling attention to a thing, directing the user, or saying \"look at this\" / \"over there\".",
+    tags: ["point", "indicate", "direct"],
+  },
+  annoyed: {
+    description: "Annoyed gesture — eye-roll, sigh, irritated body language. Play when the avatar is irritated, frustrated, or unimpressed.",
+    tags: ["annoyed", "irritated", "frustrated", "negative"],
+  },
+  angry: {
+    description: "Angry gesture. Play when the avatar is angry, furious, or threatening.",
+    tags: ["angry", "negative"],
+  },
+  sad: {
+    description: "Sad gesture. Play when the avatar is sad, disappointed, or sympathetic.",
+    tags: ["sad", "negative"],
+  },
+  laugh: {
+    description: "Laugh. Play when the avatar finds something funny.",
+    tags: ["happy", "laugh"],
+  },
+  blowkiss: {
+    description: "Blow a kiss. Play in affectionate, flirty, or romantic beats — also goodnight farewells with affection.",
+    tags: ["affectionate", "flirty", "romantic", "kiss"],
+  },
+  kiss: {
+    description: "Blow a kiss. Play in affectionate, flirty, or romantic beats.",
+    tags: ["affectionate", "flirty", "kiss"],
+  },
+  nod: {
+    description: "Nod yes. Play when agreeing strongly or confirming.",
+    tags: ["yes", "agree", "nod"],
+  },
+  shake: {
+    description: "Shake head no. Play when refusing or disagreeing strongly.",
+    tags: ["no", "disagree", "shake"],
+  },
+  shrug: {
+    description: "Shrug. Play when expressing uncertainty or indifference (\"I don't know\", \"whatever\").",
+    tags: ["shrug", "unknown", "indifferent"],
+  },
+  thumbsup: {
+    description: "Thumbs up. Play when approving, agreeing, or saying \"nice\" / \"good job\".",
+    tags: ["approve", "yes", "positive"],
+  },
+  clap: {
+    description: "Clap. Play when celebrating an achievement or applauding the user.",
+    tags: ["celebrate", "positive", "applause"],
+  },
+  bow: {
+    description: "Bow. Play in formal greetings, thanks, or theatrical exits.",
+    tags: ["greeting", "formal", "thanks"],
+  },
+};
+
 function slugify(s) {
   return String(s ?? "")
     .toLowerCase()
@@ -78,6 +168,11 @@ export default function CreatorWizard({ gateway, onClose, onCreated }) {
     displayName: "",
     agentId: "",
     fbxScale: 0.01, // overwritten by format default once a file is chosen
+    // What the avatar calls the user. Empty = no preferred form of address;
+    // the rewrite hook will leave the avatar's natural language as-is. Set
+    // to "boss", "babe", a real name, etc., to make the character lean into
+    // a relationship style.
+    userAddress: "",
   });
   const [personality, setPersonality] = useState({
     soul: "",
@@ -114,15 +209,18 @@ export default function CreatorWizard({ gateway, onClose, onCreated }) {
       setFbxFile(file);
       setParsed(result);
       setAnimations(
-        result.animations.map((a) => ({
-          ...a,
-          description: "",
-          tags: [],
-          // Bake settings; null bakedBytes means "not yet baked".
-          skipBake: false,
-          bakedBytes: null,
-          bakedExt: null,
-        })),
+        result.animations.map((a) => {
+          const seed = ANIMATION_DEFAULTS[a.name?.toLowerCase?.() ?? ""];
+          return {
+            ...a,
+            description: seed?.description ?? "",
+            tags: seed?.tags ?? [],
+            // Bake settings; null bakedBytes means "not yet baked".
+            skipBake: false,
+            bakedBytes: null,
+            bakedExt: null,
+          };
+        }),
       );
       // Default the agentId + scale from the file. Stem strips any of the
       // supported extensions; default scale is per-format.
@@ -299,6 +397,7 @@ export default function CreatorWizard({ gateway, onClose, onCreated }) {
                   [realAgentId]: {
                     avatarPath: fbxTarget,
                     fbxScale: identity.fbxScale,
+                    userAddress: identity.userAddress?.trim() || undefined,
                     environmentHdriPath: hdriChoice || undefined,
                     environmentIntensity: envIntensity,
                     backgroundIntensity: bgIntensity,
@@ -596,6 +695,21 @@ function IdentityStep({ value, onChange, onBack, onNext }) {
           value={value.agentId}
           onChange={(e) => onChange({ ...value, agentId: slugify(e.target.value) })}
           placeholder="nova"
+        />
+      </label>
+      <label>
+        <div className="muted" style={{ fontWeight: 500, color: "var(--text-secondary)", marginBottom: 2 }}>
+          What should the avatar call you?
+        </div>
+        <div className="muted" style={{ fontSize: 11, marginBottom: 6 }}>
+          A nickname, your real name, "boss", "babe" — whatever the avatar
+          should use when it addresses you. Leave blank if you don't want a
+          fixed form of address.
+        </div>
+        <input
+          value={value.userAddress}
+          onChange={(e) => onChange({ ...value, userAddress: e.target.value })}
+          placeholder="(optional)"
         />
       </label>
       <label>
