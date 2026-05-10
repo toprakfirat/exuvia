@@ -1,6 +1,6 @@
 {
   "name": "exuvia-app",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "Exuvia desktop app — Electron + React + Three.js shell that talks to OpenClaw.",
   "type": "module",
@@ -12,6 +12,7 @@
     "start": "electron .",
     "dist": "pnpm build && electron-builder --win --x64",
     "dist:linux": "pnpm build && electron-builder --linux --x64",
+    "dist:mac": "pnpm build && electron-builder --mac",
     "dist:dir": "pnpm build && electron-builder --dir"
   },
   "dependencies": {
@@ -76,6 +77,24 @@
     "linux": {
       "target": ["AppImage"],
       "category": "Utility",
+      "icon": "public/tray-icon.png"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["universal"]
+        }
+      ],
+      "icon": "public/tray-icon.png",
+      "category": "public.app-category.productivity",
+      "darkModeSupport": true,
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "exuvia uses the microphone for voice input to your AI avatar."
+      }
+    },
+    "dmg": {
+      "title": "exuvia ${version}",
       "icon": "public/tray-icon.png"
     }
   }

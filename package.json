@@ -12,6 +12,7 @@
     "dev:plugin": "pnpm --filter @exuvia/openclaw-plugin dev",
     "dev:app": "pnpm --filter exuvia-app dev",
     "dist": "pnpm --filter @exuvia/openclaw-plugin build && pnpm --filter exuvia-app dist",
-    "dist:linux": "pnpm --filter @exuvia/openclaw-plugin build && pnpm --filter exuvia-app dist:linux"
+    "dist:linux": "pnpm --filter @exuvia/openclaw-plugin build && pnpm --filter exuvia-app dist:linux",
+    "dist:mac": "pnpm --filter @exuvia/openclaw-plugin build && pnpm --filter exuvia-app dist:mac"
   }
 }

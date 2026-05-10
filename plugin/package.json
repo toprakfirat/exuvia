@@ -1,6 +1,6 @@
 {
   "name": "@exuvia/openclaw-plugin",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "Exuvia plugin for OpenClaw: avatar play_animation tool and per-avatar config sidecar.",
   "type": "module",
