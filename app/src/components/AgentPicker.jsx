@@ -6,6 +6,7 @@ import {
   ToggleWindowBinder,
   TrayIconBinder,
 } from "./AppSettings.jsx";
+import SetupModal from "./SetupModal.jsx";
 
 // SVG icon — Feather-ish lock. Two paths: shackle (bow) on top, body
 // underneath. `locked=false` opens the shackle so the same component
@@ -47,6 +48,7 @@ const PICKER_TABS = [
   { id: "avatars", label: "Avatars" },
   { id: "voice-input", label: "Voice input" },
   { id: "hotkeys", label: "Hotkeys" },
+  { id: "connection", label: "Connection" },
 ];
 
 export default function AgentPicker({
@@ -410,6 +412,7 @@ export default function AgentPicker({
           </>
         )}
         {tab === "voice-input" && <VoiceInputSetup gateway={gateway} />}
+        {tab === "connection" && <ConnectionPanel gateway={gateway} />}
         {tab === "hotkeys" && (
           <>
             <div className="picker-section-title">push-to-talk</div>
@@ -426,6 +429,157 @@ export default function AgentPicker({
         )}
       </div>
     </aside>
+  );
+}
+
+// Live gateway connection panel. Shows the active URL + a masked
+// token + the current connection status, and offers an "edit…"
+// button that pops SetupModal in edit mode for url/token changes.
+// "Disconnect" clears the device token so the next connect uses
+// the shared secret again — useful when reconnecting to a different
+// gateway or after rotating credentials.
+function ConnectionPanel({ gateway }) {
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const status = gateway.status;
+  const url = gateway.settings?.gatewayUrl ?? "(not set)";
+  const hasSecret = Boolean(gateway.settings?.sharedSecret);
+  const hasDeviceToken = Boolean(gateway.settings?.deviceToken);
+
+  const statusLabel = (() => {
+    switch (status) {
+      case "connected": return "✓ connected";
+      case "connecting": return "connecting…";
+      case "disconnected": return "disconnected";
+      case "error": return "connection error";
+      case "needs-setup": return "needs setup";
+      default: return status;
+    }
+  })();
+  const statusColor = (() => {
+    switch (status) {
+      case "connected": return "rgba(108,226,139,0.95)";
+      case "connecting": return "rgba(226,198,108,0.95)";
+      default: return "rgba(255,154,154,0.95)";
+    }
+  })();
+
+  const save = async (next) => {
+    setBusy(true);
+    try {
+      // If the secret changed, drop the device token so the new secret
+      // gets used for the next handshake. URL-only changes can keep
+      // the existing device token.
+      const secretChanged = next.sharedSecret !== gateway.settings?.sharedSecret;
+      if (secretChanged) {
+        await gateway.clearDeviceToken?.();
+      }
+      await gateway.saveSettings?.({
+        gatewayUrl: next.gatewayUrl,
+        sharedSecret: next.sharedSecret,
+      });
+      setEditing(false);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const disconnect = async () => {
+    setBusy(true);
+    try {
+      await gateway.clearDeviceToken?.();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <span className="muted" style={{ fontSize: 11 }}>
+        How exuvia talks to the openclaw gateway. The URL is usually
+        loopback (ws://127.0.0.1:18789); the shared secret comes from
+        gateway.auth.token in your <code>~/.openclaw/openclaw.json</code>.
+      </span>
+
+      <div className="field">
+        <label>Status</label>
+        <div style={{ fontSize: 11, color: statusColor }}>{statusLabel}</div>
+        {gateway.lastError && status !== "connected" && (
+          <div className="muted" style={{ fontSize: 10, marginTop: 2 }}>
+            last error: {gateway.lastError}
+          </div>
+        )}
+      </div>
+
+      <div className="field">
+        <label>Gateway URL</label>
+        <div
+          style={{
+            fontFamily: "ui-monospace, monospace",
+            fontSize: 11,
+            color: "var(--text-primary)",
+          }}
+        >
+          {url}
+        </div>
+      </div>
+
+      <div className="field">
+        <label>Shared secret</label>
+        <div
+          style={{
+            fontFamily: "ui-monospace, monospace",
+            fontSize: 11,
+            color: "var(--text-muted)",
+          }}
+        >
+          {hasSecret ? "••••••••••••••••" : "(not set)"}
+        </div>
+      </div>
+
+      <div className="field">
+        <label>Device token</label>
+        <div
+          style={{
+            fontFamily: "ui-monospace, monospace",
+            fontSize: 11,
+            color: "var(--text-muted)",
+          }}
+        >
+          {hasDeviceToken ? "•••••••• (paired)" : "(not yet paired)"}
+        </div>
+      </div>
+
+      <div className="row" style={{ marginTop: 4 }}>
+        <button
+          type="button"
+          onClick={() => setEditing(true)}
+          disabled={busy}
+        >
+          edit…
+        </button>
+        <button
+          type="button"
+          onClick={disconnect}
+          disabled={busy || !hasDeviceToken}
+          title="forget the paired device token; the next connect uses the shared secret"
+        >
+          unpair device
+        </button>
+      </div>
+
+      {editing && (
+        <SetupModal
+          mode="edit"
+          initial={{
+            gatewayUrl: gateway.settings?.gatewayUrl,
+            sharedSecret: gateway.settings?.sharedSecret,
+          }}
+          onSave={save}
+          onClose={() => setEditing(false)}
+        />
+      )}
+    </div>
   );
 }
 
