@@ -69,6 +69,75 @@ export default function ChatView({ gateway, agentId, onToolCall, onMessages }) {
     else voice.start();
   };
 
+  // Push-to-talk hotkey. Reads the user's configured key code from the
+  // Electron settings store (default "Space"). Active only when no
+  // input/textarea/contenteditable is focused, so typing the same key
+  // in a form stays normal. Press: start recording. Release: stop and
+  // auto-send. OS auto-repeat is filtered with `e.repeat`. Esc cancels.
+  // Empty string disables the hotkey entirely.
+  const [pttKeyCode, setPttKeyCode] = useState("Space");
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const cfg = await window.exuvia?.settings?.get?.();
+        if (!cancelled && typeof cfg?.voiceHotkey === "string") {
+          setPttKeyCode(cfg.voiceHotkey);
+        }
+      } catch {
+        /* keep default */
+      }
+    })();
+    // Stay reactive: the settings panel can broadcast voice-hotkey changes
+    // by dispatching `exuvia:voice-hotkey` on window with the new key code.
+    const onUpdate = (e) =>
+      typeof e?.detail === "string" && setPttKeyCode(e.detail);
+    window.addEventListener("exuvia:voice-hotkey", onUpdate);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("exuvia:voice-hotkey", onUpdate);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!pttKeyCode) return undefined;
+    const isFormFocus = () => {
+      const el = document.activeElement;
+      if (!el) return false;
+      const tag = el.tagName?.toLowerCase();
+      return (
+        tag === "input" ||
+        tag === "textarea" ||
+        tag === "select" ||
+        el.isContentEditable
+      );
+    };
+    const onDown = (e) => {
+      if (e.code !== pttKeyCode || e.repeat || isFormFocus()) return;
+      if (voice.state === "transcribing") return;
+      e.preventDefault();
+      if (voice.state !== "recording") voice.start();
+    };
+    const onUp = (e) => {
+      if (e.code === "Escape" && voice.state === "recording") {
+        e.preventDefault();
+        voice.cancel();
+        return;
+      }
+      if (e.code !== pttKeyCode) return;
+      if (voice.state === "recording") {
+        e.preventDefault();
+        voice.stop();
+      }
+    };
+    window.addEventListener("keydown", onDown);
+    window.addEventListener("keyup", onUp);
+    return () => {
+      window.removeEventListener("keydown", onDown);
+      window.removeEventListener("keyup", onUp);
+    };
+  }, [voice, pttKeyCode]);
+
   // Display-time dedupe. The gateway emits the same logical message
   // multiple times across event families (session.message + chat) and
   // streaming chunks for one assistant turn arrive as separate rows.
@@ -167,12 +236,14 @@ export default function ChatView({ gateway, agentId, onToolCall, onMessages }) {
           disabled={voice.state === "transcribing"}
           title={
             voice.state === "recording"
-              ? "Stop recording"
+              ? `Stop recording${pttKeyCode ? ` (or release ${friendlyKeyName(pttKeyCode)})` : ""}`
               : voice.state === "transcribing"
                 ? "Transcribing…"
                 : voice.state === "error"
                   ? `Voice error: ${voice.error}`
-                  : "Hold to talk"
+                  : pttKeyCode
+                    ? `Click or hold ${friendlyKeyName(pttKeyCode)} to talk`
+                    : "Click to talk"
           }
         >
           {voice.state === "recording" ? "■" : voice.state === "transcribing" ? "…" : "🎤"}
@@ -191,6 +262,16 @@ export default function ChatView({ gateway, agentId, onToolCall, onMessages }) {
       )}
     </div>
   );
+}
+
+// Display-friendly name for a KeyboardEvent.code value, used in mic-button
+// tooltips. Falls back to the raw code if we don't have a special label.
+export function friendlyKeyName(code) {
+  if (!code) return "";
+  if (code === "Space") return "Space";
+  if (code.startsWith("Key")) return code.slice(3); // KeyA → A
+  if (code.startsWith("Digit")) return code.slice(5); // Digit1 → 1
+  return code;
 }
 
 function pickText(m) {

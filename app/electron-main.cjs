@@ -86,7 +86,7 @@ ipcMain.handle("exuvia:audio:transcribe", async (_e, args) => {
     const proc = spawn(
       "openclaw",
       ["capability", "audio", "transcribe", "--file", tmpPath, "--json"],
-      { shell: true },
+      { shell: true, env: envWithProviderKeys() },
     );
     proc.stdout.on("data", (chunk) => {
       stdout += chunk.toString();
@@ -144,6 +144,120 @@ ipcMain.handle("exuvia:audio:transcribe", async (_e, args) => {
   }
   return result;
 });
+
+// Run `openclaw capability audio providers` and return the parsed JSON.
+// Used by AvatarSettings → Voice to show which transcription providers
+// are configured and selected.
+ipcMain.handle("exuvia:openclaw:audioProviders", async () => {
+  const { spawn } = require("node:child_process");
+  return await new Promise((resolve) => {
+    let stdout = "";
+    let stderr = "";
+    const proc = spawn(
+      "openclaw",
+      ["capability", "audio", "providers", "--json"],
+      { shell: true, env: envWithProviderKeys() },
+    );
+    proc.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+    proc.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    proc.on("error", (err) => {
+      resolve({ ok: false, error: String(err?.message ?? err) });
+    });
+    proc.on("close", (code) => {
+      if (code !== 0) {
+        resolve({
+          ok: false,
+          error: stderr.trim() || stdout.trim() || `exit ${code}`,
+        });
+        return;
+      }
+      // The CLI emits one JSON object per line — not a single array.
+      const providers = [];
+      for (const line of stdout.split(/\r?\n/)) {
+        const t = line.trim();
+        if (!t || !t.startsWith("{")) continue;
+        try {
+          providers.push(JSON.parse(t));
+        } catch {
+          /* ignore non-JSON lines */
+        }
+      }
+      resolve({ ok: true, providers });
+    });
+  });
+});
+
+// Persist a provider API key to encrypted local storage and return ok/error.
+// We store keys in a separate file from settings.json (so it stays out of
+// any plain-text dump) and decrypt them on demand when spawning openclaw.
+// Provider ids match openclaw's (groq, openai, deepgram).
+const apiKeysPath = path.join(userDataDir, "api-keys.bin");
+function loadApiKeys() {
+  try {
+    if (!fs.existsSync(apiKeysPath)) return {};
+    if (!safeStorage.isEncryptionAvailable()) return {};
+    const buf = fs.readFileSync(apiKeysPath);
+    const json = safeStorage.decryptString(buf);
+    return JSON.parse(json) || {};
+  } catch {
+    return {};
+  }
+}
+function saveApiKeys(map) {
+  if (!safeStorage.isEncryptionAvailable()) return false;
+  const json = JSON.stringify(map);
+  fs.writeFileSync(apiKeysPath, safeStorage.encryptString(json));
+  return true;
+}
+// Map an openclaw provider id to the env-var name openclaw expects.
+// Each provider declares this in its plugin metadata; this list mirrors
+// the most common ones we surface in the UI.
+const PROVIDER_ENV_VARS = {
+  groq: "GROQ_API_KEY",
+  openai: "OPENAI_API_KEY",
+  deepgram: "DEEPGRAM_API_KEY",
+  elevenlabs: "ELEVENLABS_API_KEY",
+  anthropic: "ANTHROPIC_API_KEY",
+  google: "GOOGLE_API_KEY",
+};
+
+ipcMain.handle("exuvia:openclaw:authSet", async (_e, args) => {
+  const provider = typeof args?.provider === "string" ? args.provider.trim() : "";
+  const apiKey = typeof args?.apiKey === "string" ? args.apiKey.trim() : "";
+  if (!provider || !/^[a-z0-9_-]{2,40}$/i.test(provider)) {
+    return { ok: false, error: "invalid provider id" };
+  }
+  if (!PROVIDER_ENV_VARS[provider]) {
+    return { ok: false, error: `unknown provider: ${provider}` };
+  }
+  if (!apiKey) return { ok: false, error: "apiKey required" };
+  try {
+    const next = { ...loadApiKeys(), [provider]: apiKey };
+    const ok = saveApiKeys(next);
+    if (!ok) return { ok: false, error: "encrypted store unavailable" };
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: String(err?.message ?? err) };
+  }
+});
+
+// Build the env block for openclaw spawns: process.env + every persisted
+// provider key mapped onto its expected env var. Called by the audio
+// transcribe + audio providers handlers below so child processes inherit
+// keys without leaking them to other apps.
+function envWithProviderKeys() {
+  const env = { ...process.env };
+  const keys = loadApiKeys();
+  for (const [id, value] of Object.entries(keys)) {
+    const name = PROVIDER_ENV_VARS[id];
+    if (name && value) env[name] = value;
+  }
+  return env;
+}
 
 // Read a local audio file (e.g. the audioPath returned by tts.convert) and
 // hand it back to the renderer as base64 so it can be played as a Blob URL.

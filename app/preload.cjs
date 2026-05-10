@@ -14,6 +14,10 @@ contextBridge.exposeInMainWorld("exuvia", {
     readBase64: (filePath) => ipcRenderer.invoke("exuvia:audio:readBase64", filePath),
     transcribe: (args) => ipcRenderer.invoke("exuvia:audio:transcribe", args),
   },
+  openclaw: {
+    audioProviders: () => ipcRenderer.invoke("exuvia:openclaw:audioProviders"),
+    authSet: (args) => ipcRenderer.invoke("exuvia:openclaw:authSet", args),
+  },
   fbx: {
     write: (args) => ipcRenderer.invoke("exuvia:fbx:write", args),
     read: (filePath) => ipcRenderer.invoke("exuvia:fbx:read", filePath),
