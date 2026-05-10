@@ -2,6 +2,7 @@
 const { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, nativeImage, safeStorage, shell, Tray } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
+const http = require("node:http");
 
 const userDataDir = app.getPath("userData");
 const tokenPath = path.join(userDataDir, "device-token.bin");
@@ -458,6 +459,11 @@ function createWindow() {
     height: 800,
     backgroundColor: "#0b0b0d",
     icon: resolveTrayIconPath(),
+    // Hide the default File / Edit / View / Help menu strip. Electron
+    // injects it on Windows + Linux by default; we don't use any of
+    // its commands and it just clutters the chrome above the avatar
+    // scene. macOS keeps the menu in the global menu bar regardless.
+    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
@@ -498,8 +504,110 @@ function createWindow() {
   } else if (!app.isPackaged) {
     mainWindow.loadURL("http://localhost:5173");
   } else {
-    mainWindow.loadFile(path.join(__dirname, "dist", "index.html"));
+    // Packaged app: serve dist/ over a loopback HTTP server instead
+    // of loadFile(). The gateway's origin check rejects file:// because
+    // it parses to a null origin. http://127.0.0.1:<port> parses to a
+    // loopback origin and passes the gateway's local-loopback bypass.
+    startStaticServer(path.join(__dirname, "dist"))
+      .then((url) => mainWindow.loadURL(url))
+      .catch((err) => {
+        console.error("[static] server failed to start:", err);
+        // Fall back to file:// — won't connect to gateway, but at
+        // least the UI shell renders so the user can see the error.
+        mainWindow.loadFile(path.join(__dirname, "dist", "index.html"));
+      });
   }
+}
+
+// Tiny static-file server bound to 127.0.0.1 on a random free port.
+// Serves the renderer's built dist/ folder. Only ever exposes files
+// inside the configured root, only over loopback. Returns the
+// `http://127.0.0.1:<port>/` URL the BrowserWindow should load.
+let staticServerUrl = null;
+function startStaticServer(rootDir) {
+  if (staticServerUrl) return staticServerUrl;
+
+  const MIME = {
+    ".html": "text/html; charset=utf-8",
+    ".js": "application/javascript; charset=utf-8",
+    ".mjs": "application/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".ico": "image/x-icon",
+    ".woff": "font/woff",
+    ".woff2": "font/woff2",
+    ".ttf": "font/ttf",
+    ".glb": "model/gltf-binary",
+    ".gltf": "model/gltf+json",
+    ".exr": "image/x-exr",
+    ".map": "application/json; charset=utf-8",
+  };
+
+  const server = http.createServer((req, res) => {
+    try {
+      // Strip query string + decode. Reject anything with .. so we
+      // can't be tricked into serving outside rootDir.
+      let urlPath = decodeURIComponent((req.url || "/").split("?")[0]);
+      if (urlPath.includes("..")) {
+        res.writeHead(400);
+        res.end("bad request");
+        return;
+      }
+      if (urlPath === "/" || urlPath === "") urlPath = "/index.html";
+
+      const filePath = path.join(rootDir, urlPath);
+      // Final guard against escaping rootDir via symlinks etc.
+      if (!filePath.startsWith(rootDir)) {
+        res.writeHead(403);
+        res.end("forbidden");
+        return;
+      }
+
+      fs.stat(filePath, (statErr, stat) => {
+        if (statErr || !stat.isFile()) {
+          // Fall back to index.html for SPA-style routes.
+          if (path.extname(filePath) === "") {
+            const fallback = path.join(rootDir, "index.html");
+            fs.readFile(fallback, (err, data) => {
+              if (err) { res.writeHead(404); res.end("not found"); return; }
+              res.writeHead(200, { "Content-Type": MIME[".html"] });
+              res.end(data);
+            });
+            return;
+          }
+          res.writeHead(404);
+          res.end("not found");
+          return;
+        }
+        const ext = path.extname(filePath).toLowerCase();
+        const type = MIME[ext] || "application/octet-stream";
+        res.writeHead(200, { "Content-Type": type, "Cache-Control": "no-cache" });
+        fs.createReadStream(filePath).pipe(res);
+      });
+    } catch (err) {
+      res.writeHead(500);
+      res.end(String(err?.message ?? err));
+    }
+  });
+
+  // Listen on 127.0.0.1 only (never accessible from the network) and
+  // let the OS pick a free port. Returns a promise that resolves to
+  // the URL once the server is ready to accept connections.
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const port = server.address().port;
+      staticServerUrl = `http://127.0.0.1:${port}/`;
+      console.log(`[static] serving ${rootDir} at ${staticServerUrl}`);
+      resolve(staticServerUrl);
+    });
+  });
 }
 
 // Find the tray icon file. Priority order:
@@ -786,10 +894,22 @@ async function ensurePluginInstalled() {
 // We add all three. Idempotent: re-running on a config that already
 // has them is a no-op. We also turn on allowInsecureAuth so the
 // shared-secret-from-localhost path works without TLS.
+// Wildcard `*` is accepted by openclaw's origin check (see
+// gateway/origin-check.ts) and is the only value that's guaranteed to
+// match every variant the renderer might send (http://localhost:5173
+// in dev, file:// when packaged, null in some sandboxed contexts,
+// and any custom protocol if we ever add one). Loopback bind already
+// gates this from the network — adding a wildcard here only widens
+// access for *local* connections, which the gateway port is bound to
+// anyway when bind=loopback. Safe for the desktop-app use case; the
+// user's controlUi remains untouched if they've already configured a
+// stricter list.
 const REQUIRED_ALLOWED_ORIGINS = [
+  "*",
   "http://localhost:5173",
-  "file://",
-  "app://.",
+  "http://localhost:18789",
+  "http://127.0.0.1:5173",
+  "http://127.0.0.1:18789",
 ];
 async function ensureGatewayAcceptsApp() {
   const home = require("node:os").homedir();

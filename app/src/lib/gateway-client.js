@@ -199,8 +199,10 @@ export class GatewayClient {
 
     // The gateway protocol enforces a closed enum on client.id and client.mode.
     // We identify as openclaw-control-ui / ui — functionally we're a Control
-    // UI variant. displayName surfaces our actual identity in the gateway's
-    // presence list.
+    // UI variant. The renderer is served over http://127.0.0.1:<port> by
+    // our embedded static server (electron-main.cjs), so the WS handshake
+    // ships a loopback Origin and passes the gateway's origin check.
+    // displayName surfaces our actual identity in the gateway's presence list.
     const params = {
       minProtocol: PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
