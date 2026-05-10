@@ -9,10 +9,34 @@ import ChatView, { scrubAssistantText } from "./components/ChatView.jsx";
 import CreatorWizard from "./components/CreatorWizard.jsx";
 import AvatarSettings from "./components/AvatarSettings.jsx";
 import ChannelPairing from "./components/ChannelPairing.jsx";
+import { importAvatarBundle } from "./lib/avatar-import.js";
 
 export default function App() {
   const gateway = useGateway();
-  const [activeAgentId, setActiveAgentId] = useState(null);
+  // Remember the last selected avatar across app restarts. We read the
+  // saved id synchronously on first render so the avatar appears without
+  // a "no avatar selected" flash. agents.list resolution happens later
+  // (in the picker / useAvatarConfig) — if the saved id no longer exists
+  // those will handle the empty case naturally.
+  const [activeAgentId, setActiveAgentId] = useState(() => {
+    try {
+      const saved = localStorage.getItem("exuvia.activeAgentId");
+      return saved && saved.trim() ? saved : null;
+    } catch {
+      return null;
+    }
+  });
+  useEffect(() => {
+    try {
+      if (activeAgentId) {
+        localStorage.setItem("exuvia.activeAgentId", activeAgentId);
+      } else {
+        localStorage.removeItem("exuvia.activeAgentId");
+      }
+    } catch {
+      /* localStorage may be unavailable in some Electron contexts */
+    }
+  }, [activeAgentId]);
   const [creatorOpen, setCreatorOpen] = useState(false);
   const [settingsAgentId, setSettingsAgentId] = useState(null);
   const [pairingAgentId, setPairingAgentId] = useState(null);
@@ -24,6 +48,12 @@ export default function App() {
   // Currently-playing non-idle animation, surfaced as an on-canvas badge.
   // Null when nothing or only an idle is playing.
   const [activeGesture, setActiveGesture] = useState(null);
+  // Drag-and-drop import state. `dragHover` shows the overlay while a
+  // .exuvia file is over the window. `dropStatus` carries progress/error
+  // text shown briefly after drop.
+  const [dragHover, setDragHover] = useState(false);
+  const [dropStatus, setDropStatus] = useState(null);
+  const dragCounterRef = useRef(0);
   // Unsaved settings-panel edits that the scene should preview live. Cleared
   // when the panel closes or saves.
   const [previewAvatar, setPreviewAvatar] = useState(null);
@@ -201,6 +231,83 @@ export default function App() {
     }
   }
 
+  // Drag-and-drop import. Dropping a `.exuvia` (or `.json`) file anywhere
+  // on the window runs the same import flow as the picker's import button.
+  // dragenter / dragleave fire per child element, so we use a counter to
+  // know when the cursor truly leaves the window. dragover is required
+  // to prevent default — otherwise the browser navigates to the file.
+  useEffect(() => {
+    const isAcceptable = (e) => {
+      const items = e.dataTransfer?.items;
+      if (!items || items.length === 0) return false;
+      for (const it of items) {
+        if (it.kind !== "file") continue;
+        const t = (it.type || "").toLowerCase();
+        if (t.includes("json") || t === "" || t === "application/octet-stream") {
+          return true;
+        }
+      }
+      return false;
+    };
+    const onEnter = (e) => {
+      if (!isAcceptable(e)) return;
+      e.preventDefault();
+      dragCounterRef.current += 1;
+      setDragHover(true);
+    };
+    const onOver = (e) => {
+      if (!isAcceptable(e)) return;
+      e.preventDefault();
+      // Show "copy" cursor instead of the default "move" — semantically
+      // we're importing, not relocating the file.
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+    };
+    const onLeave = (e) => {
+      if (!isAcceptable(e)) return;
+      dragCounterRef.current = Math.max(0, dragCounterRef.current - 1);
+      if (dragCounterRef.current === 0) setDragHover(false);
+    };
+    const onDrop = async (e) => {
+      e.preventDefault();
+      dragCounterRef.current = 0;
+      setDragHover(false);
+      const file = e.dataTransfer?.files?.[0];
+      if (!file) return;
+      const name = (file.name ?? "").toLowerCase();
+      if (!name.endsWith(".exuvia") && !name.endsWith(".json")) {
+        setDropStatus(`unsupported file: ${file.name} — expected .exuvia`);
+        setTimeout(() => setDropStatus(null), 4000);
+        return;
+      }
+      try {
+        setDropStatus("reading…");
+        const text = await file.text();
+        setDropStatus("importing…");
+        const result = await importAvatarBundle(gateway, text, {
+          onProgress: (p) =>
+            setDropStatus(`${p.stage}${p.detail ? ` — ${p.detail}` : ""}`),
+        });
+        setDropStatus(`imported ✓`);
+        setPickerRefreshKey((n) => n + 1);
+        if (result?.agentId) setActiveAgentId(result.agentId);
+      } catch (err) {
+        setDropStatus(`import failed: ${err?.message ?? err}`);
+      } finally {
+        setTimeout(() => setDropStatus(null), 4000);
+      }
+    };
+    window.addEventListener("dragenter", onEnter);
+    window.addEventListener("dragover", onOver);
+    window.addEventListener("dragleave", onLeave);
+    window.addEventListener("drop", onDrop);
+    return () => {
+      window.removeEventListener("dragenter", onEnter);
+      window.removeEventListener("dragover", onOver);
+      window.removeEventListener("dragleave", onLeave);
+      window.removeEventListener("drop", onDrop);
+    };
+  }, [gateway]);
+
   return (
     <div className="app-shell" style={chatStyle}>
       <AgentPicker
@@ -365,6 +472,20 @@ export default function App() {
             setPickerRefreshKey((n) => n + 1);
           }}
         />
+      )}
+      {dragHover && (
+        <div className="drop-overlay" aria-hidden>
+          <div className="drop-overlay-card">
+            <div className="drop-overlay-icon">↥</div>
+            <div className="drop-overlay-title">Drop to import avatar</div>
+            <div className="drop-overlay-hint">.exuvia bundle</div>
+          </div>
+        </div>
+      )}
+      {dropStatus && (
+        <div className="drop-status" role="status">
+          {dropStatus}
+        </div>
       )}
     </div>
   );

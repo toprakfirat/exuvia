@@ -29,7 +29,18 @@ contextBridge.exposeInMainWorld("exuvia", {
     expand: (raw) => ipcRenderer.invoke("exuvia:path:expand", raw),
   },
   openExternal: (url) => ipcRenderer.invoke("exuvia:openExternal", url),
+  hotkey: {
+    getToggle: () => ipcRenderer.invoke("exuvia:hotkey:getToggle"),
+    setToggle: (accelerator) => ipcRenderer.invoke("exuvia:hotkey:setToggle", accelerator),
+  },
+  tray: {
+    setIcon: (sourcePath) => ipcRenderer.invoke("exuvia:tray:setIcon", sourcePath),
+    resetIcon: () => ipcRenderer.invoke("exuvia:tray:resetIcon"),
+    getIconInfo: () => ipcRenderer.invoke("exuvia:tray:getIconInfo"),
+  },
   dialog: {
     openFile: (opts) => ipcRenderer.invoke("exuvia:dialog:openFile", opts),
+    openTextFile: (opts) => ipcRenderer.invoke("exuvia:dialog:openTextFile", opts),
+    saveTextFile: (args) => ipcRenderer.invoke("exuvia:dialog:saveTextFile", args),
   },
 });

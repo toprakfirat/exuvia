@@ -1,5 +1,5 @@
 /* eslint-disable */
-const { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } = require("electron");
+const { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, nativeImage, safeStorage, shell, Tray } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
 
@@ -346,6 +346,58 @@ ipcMain.handle("exuvia:dir:remove", async (_e, dirPath) => {
   }
 });
 
+// Save a UTF-8 string to a path chosen by the user. Used by avatar export.
+// Caller passes a default filename (the user can rename in the save dialog)
+// and the file content. Returns { ok, path } or { ok: false, error }.
+ipcMain.handle("exuvia:dialog:saveTextFile", async (_e, args) => {
+  const win = BrowserWindow.getFocusedWindow();
+  const defaultName = typeof args?.defaultName === "string" ? args.defaultName : "exuvia-avatar.exuvia";
+  const content = typeof args?.content === "string" ? args.content : "";
+  const filters =
+    Array.isArray(args?.filters) && args.filters.length > 0
+      ? args.filters
+      : [{ name: "Exuvia avatar", extensions: ["exuvia", "json"] }];
+  try {
+    const result = await dialog.showSaveDialog(win ?? undefined, {
+      title: args?.title ?? "Save",
+      defaultPath: defaultName,
+      filters,
+    });
+    if (result.canceled || !result.filePath) return { ok: false, cancelled: true };
+    await fs.promises.writeFile(result.filePath, content, "utf8");
+    return { ok: true, path: result.filePath };
+  } catch (err) {
+    return { ok: false, error: String(err?.message ?? err) };
+  }
+});
+
+// Read a UTF-8 file from a path chosen by the user. Used by avatar import.
+// Returns { ok, content, path } or { ok: false, error }.
+ipcMain.handle("exuvia:dialog:openTextFile", async (_e, opts) => {
+  const win = BrowserWindow.getFocusedWindow();
+  try {
+    const result = await dialog.showOpenDialog(win ?? undefined, {
+      title: opts?.title ?? "Open",
+      properties: ["openFile"],
+      filters:
+        Array.isArray(opts?.filters) && opts.filters.length > 0
+          ? opts.filters
+          : [
+              { name: "Exuvia avatar", extensions: ["exuvia", "json"] },
+              { name: "All files", extensions: ["*"] },
+            ],
+    });
+    if (result.canceled || result.filePaths.length === 0) {
+      return { ok: false, cancelled: true };
+    }
+    const filePath = result.filePaths[0];
+    const content = await fs.promises.readFile(filePath, "utf8");
+    return { ok: true, content, path: filePath };
+  } catch (err) {
+    return { ok: false, error: String(err?.message ?? err) };
+  }
+});
+
 // Native file picker. Used by env-asset choosers and any future "browse for
 // file" UI. Caller passes filter labels; we return the chosen absolute path
 // (or null if cancelled).
@@ -383,11 +435,29 @@ ipcMain.handle("exuvia:path:expand", (_e, raw) => {
   return raw;
 });
 
+// Single-window app — keep a module-level reference so the tray menu can
+// show/hide the window without recreating it. The tray reference is
+// persisted too because Electron destroys the icon when the Tray instance
+// is garbage-collected.
+let mainWindow = null;
+let tray = null;
+// `app.isQuiting` is set by the tray's Quit menu item so the window's
+// `close` event handler can skip the "hide instead of close" branch and
+// let the OS actually close the process.
+app.isQuiting = false;
+
 function createWindow() {
-  const win = new BrowserWindow({
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+    return;
+  }
+  mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
     backgroundColor: "#0b0b0d",
+    icon: resolveTrayIconPath(),
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
@@ -395,38 +465,266 @@ function createWindow() {
     },
   });
 
+  // Intercept the close button so it hides to tray instead of quitting.
+  // The user can still quit from the tray menu (which sets
+  // app.isQuiting = true) or via the OS task killer.
+  mainWindow.on("close", (e) => {
+    if (app.isQuiting) return;
+    e.preventDefault();
+    mainWindow.hide();
+  });
+  mainWindow.on("closed", () => {
+    mainWindow = null;
+  });
+
   // Auto-grant microphone access for the voice-input feature. We're a
   // single-origin Electron app pointing at our own bundled HTML — there's
   // no third-party page that could request the mic. On Windows the OS-
   // level permission prompt still gates this; we just don't add a second
   // gate on top of it.
-  win.webContents.session.setPermissionRequestHandler((_wc, permission, cb) => {
+  mainWindow.webContents.session.setPermissionRequestHandler((_wc, permission, cb) => {
     if (permission === "media" || permission === "audioCapture") {
       cb(true);
       return;
     }
     cb(false);
   });
-  win.webContents.session.setPermissionCheckHandler((_wc, permission) => {
+  mainWindow.webContents.session.setPermissionCheckHandler((_wc, permission) => {
     return permission === "media" || permission === "audioCapture";
   });
 
   if (process.env.VITE_DEV_SERVER_URL) {
-    win.loadURL(process.env.VITE_DEV_SERVER_URL);
+    mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
   } else if (!app.isPackaged) {
-    win.loadURL("http://localhost:5173");
+    mainWindow.loadURL("http://localhost:5173");
   } else {
-    win.loadFile(path.join(__dirname, "dist", "index.html"));
+    mainWindow.loadFile(path.join(__dirname, "dist", "index.html"));
   }
 }
 
+// Find the tray icon file. Priority order:
+//   1. userData/tray-icon.png — the user's custom override (set via the
+//      "Change icon" UI). Persists across upgrades because userData is
+//      outside the app bundle.
+//   2. dev: app/public/tray-icon.png — what ships with the source repo
+//   3. packaged: alongside the asar bundle
+// If none exists we fall back to a tiny generated coloured square so
+// the tray still appears — better than crashing.
+const userTrayIconPath = path.join(userDataDir, "tray-icon.png");
+function resolveTrayIconPath() {
+  const candidates = [
+    userTrayIconPath,
+    path.join(__dirname, "public", "tray-icon.png"),
+    path.join(__dirname, "tray-icon.png"),
+    path.join(process.resourcesPath ?? "", "tray-icon.png"),
+  ];
+  for (const c of candidates) {
+    try {
+      if (c && fs.existsSync(c)) return c;
+    } catch {
+      /* skip */
+    }
+  }
+  return null;
+}
+
+// Reload the tray's icon from the current resolved path. Called after
+// the user changes or resets the icon so the change takes effect
+// without an app restart.
+function reloadTrayIcon() {
+  if (!tray) return;
+  try {
+    tray.setImage(buildTrayIcon());
+  } catch (err) {
+    console.warn("[tray] icon reload failed", err);
+  }
+}
+
+// IPC: copy a user-picked image file into userData/tray-icon.png.
+// We accept the source path and stream-copy it so we don't depend on
+// any image encoding library — Electron's Tray accepts the same set of
+// formats (PNG/ICO/etc.) regardless of how the bytes arrived.
+ipcMain.handle("exuvia:tray:setIcon", async (_e, sourcePath) => {
+  if (typeof sourcePath !== "string" || !sourcePath) {
+    return { ok: false, error: "sourcePath required" };
+  }
+  try {
+    // Validate that the file actually loads as an image before
+    // overwriting whatever icon we have now — otherwise the tray would
+    // silently fall back to the placeholder square.
+    const img = nativeImage.createFromPath(sourcePath);
+    if (img.isEmpty()) {
+      return { ok: false, error: "file is not a valid image" };
+    }
+    await fs.promises.copyFile(sourcePath, userTrayIconPath);
+    reloadTrayIcon();
+    return { ok: true, path: userTrayIconPath };
+  } catch (err) {
+    return { ok: false, error: String(err?.message ?? err) };
+  }
+});
+
+// IPC: remove the userData override and fall back to the bundled icon.
+ipcMain.handle("exuvia:tray:resetIcon", async () => {
+  try {
+    if (fs.existsSync(userTrayIconPath)) {
+      await fs.promises.unlink(userTrayIconPath);
+    }
+    reloadTrayIcon();
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: String(err?.message ?? err) };
+  }
+});
+
+// IPC: report which icon source is currently in effect, so the UI can
+// show "(default)" or "(custom)".
+ipcMain.handle("exuvia:tray:getIconInfo", () => {
+  const resolved = resolveTrayIconPath();
+  return {
+    resolvedPath: resolved,
+    isCustom: resolved === userTrayIconPath,
+  };
+});
+
+function buildTrayIcon() {
+  const iconPath = resolveTrayIconPath();
+  if (iconPath) {
+    const img = nativeImage.createFromPath(iconPath);
+    if (!img.isEmpty()) return img;
+  }
+  // Fallback: a 16×16 #6cf coloured square. Encoded as a minimal RGBA
+  // bitmap so the tray icon still appears even before the user drops
+  // their own tray-icon.png into app/public/.
+  const size = 16;
+  const buf = Buffer.alloc(size * size * 4);
+  for (let i = 0; i < size * size; i += 1) {
+    buf[i * 4 + 0] = 0x6c; // R
+    buf[i * 4 + 1] = 0xc0; // G
+    buf[i * 4 + 2] = 0xff; // B
+    buf[i * 4 + 3] = 0xff; // A
+  }
+  return nativeImage.createFromBuffer(buf, { width: size, height: size });
+}
+
+// Show/hide the main window. Used by the tray icon click handler and by
+// the global toggle hotkey. Creates the window if it doesn't exist yet
+// (e.g. user clicked Quit-window once and is opening from the tray).
+function toggleMainWindow() {
+  if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible() && mainWindow.isFocused()) {
+    mainWindow.hide();
+  } else {
+    createWindow();
+  }
+}
+
+// Global toggle hotkey. Loaded from settings.json on boot, re-registered
+// whenever the renderer changes it via IPC. Default is empty (disabled)
+// so we don't grab a key the user didn't pick. Accelerator strings are
+// Electron's format ("Ctrl+Shift+E", "Alt+Space", etc.) — see
+// https://www.electronjs.org/docs/latest/api/accelerator
+let registeredHotkey = "";
+function applyToggleHotkey(accelerator) {
+  // Always release any previous binding before trying a new one. If the
+  // new accelerator is empty or invalid we just stay un-registered.
+  if (registeredHotkey) {
+    try { globalShortcut.unregister(registeredHotkey); } catch { /* ignore */ }
+    registeredHotkey = "";
+  }
+  if (!accelerator) return { ok: true };
+  try {
+    const ok = globalShortcut.register(accelerator, toggleMainWindow);
+    if (!ok) return { ok: false, error: "register returned false (key may be reserved by the OS)" };
+    registeredHotkey = accelerator;
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: String(err?.message ?? err) };
+  }
+}
+
+ipcMain.handle("exuvia:hotkey:setToggle", (_e, accelerator) => {
+  const acc = typeof accelerator === "string" ? accelerator.trim() : "";
+  const result = applyToggleHotkey(acc);
+  if (result.ok) {
+    // Persist alongside other ui settings so it sticks across restarts.
+    const cur = loadSettings();
+    saveSettings({ ...cur, toggleHotkey: acc });
+  }
+  return { ...result, accelerator: acc };
+});
+
+ipcMain.handle("exuvia:hotkey:getToggle", () => {
+  const cur = loadSettings();
+  return { accelerator: typeof cur?.toggleHotkey === "string" ? cur.toggleHotkey : "" };
+});
+
+function setupTray() {
+  if (tray) return;
+  tray = new Tray(buildTrayIcon());
+  tray.setToolTip("exuvia");
+  const menu = Menu.buildFromTemplate([
+    {
+      label: "Open exuvia",
+      click: () => createWindow(),
+    },
+    { type: "separator" },
+    {
+      label: "Quit",
+      click: () => {
+        app.isQuiting = true;
+        app.quit();
+      },
+    },
+  ]);
+  tray.setContextMenu(menu);
+  // Single click on the tray icon (Windows + Linux) toggles the window.
+  // macOS users typically use the menu, but click works there too.
+  tray.on("click", toggleMainWindow);
+}
+
+// Single-instance lock: if the user double-launches the app, focus the
+// existing window instead of spawning a second process. Without this the
+// tray icon would also be duplicated.
+const gotInstanceLock = app.requestSingleInstanceLock();
+if (!gotInstanceLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    createWindow();
+  });
+}
+
 app.whenReady().then(() => {
+  setupTray();
   createWindow();
+  // Restore the user's saved toggle hotkey (if any) so it's live from
+  // boot. Failures are non-fatal — the user can rebind from the UI.
+  const saved = loadSettings();
+  if (typeof saved?.toggleHotkey === "string" && saved.toggleHotkey) {
+    const r = applyToggleHotkey(saved.toggleHotkey);
+    if (!r.ok) {
+      console.warn(`[tray] toggle hotkey "${saved.toggleHotkey}" not registered: ${r.error}`);
+    }
+  }
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    createWindow();
   });
 });
 
+// Drop every global accelerator on shutdown so other apps don't see a
+// dead binding lingering after exuvia exits.
+app.on("will-quit", () => {
+  try { globalShortcut.unregisterAll(); } catch { /* ignore */ }
+});
+
+// With a tray, "all windows closed" doesn't mean "quit" — the user just
+// hid the window. Stay alive in the tray; they explicitly quit via the
+// tray menu. macOS already keeps apps alive on close, so this guard is
+// effectively a no-op there.
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
+  // intentionally do nothing — tray keeps the app running
+});
+
+app.on("before-quit", () => {
+  app.isQuiting = true;
 });

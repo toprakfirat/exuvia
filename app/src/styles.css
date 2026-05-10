@@ -331,6 +331,42 @@ body::after {
   overflow: hidden;
 }
 
+/* Tab strip at the top of the picker drawer. Sits between the resize
+   handle and the body so it doesn't scroll out of view when the list
+   gets long. Tabs adopt the same chip styling as elsewhere in the app
+   for consistency. */
+.picker-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 12px 0;
+  flex: 0 0 auto;
+}
+
+.picker-tab {
+  padding: 5px 10px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.picker-tab:hover {
+  color: var(--text-primary);
+}
+
+.picker-tab.active {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-glass);
+  border-bottom-color: transparent;
+  border-radius: 4px 4px 0 0;
+}
+
 .picker-section-title {
   font-size: 10px;
   text-transform: uppercase;
@@ -1234,6 +1270,75 @@ input[type="range"] {
 }
 
 /* === modals === */
+/* Full-screen drop target shown while a .exuvia file is dragged over the
+   window. Pure visual cue — pointer-events: none so it can't intercept
+   drag events away from the window listeners. */
+.drop-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 30, 50, 0.55);
+  backdrop-filter: blur(10px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  pointer-events: none;
+  animation: fadeIn 0.12s ease-out;
+}
+
+.drop-overlay-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 32px 48px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 2px dashed rgba(150, 180, 255, 0.55);
+  border-radius: 12px;
+  color: var(--text-primary);
+}
+
+.drop-overlay-icon {
+  font-size: 48px;
+  line-height: 1;
+  color: rgba(150, 180, 255, 0.85);
+}
+
+.drop-overlay-title {
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.drop-overlay-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+/* Small toast at the bottom-right while the import runs and for ~4s
+   after it finishes. Status text comes straight from
+   importAvatarBundle's progress callback. */
+.drop-status {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  padding: 8px 14px;
+  font-size: 11px;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  color: var(--text-primary);
+  z-index: 1001;
+  animation: slideIn 0.18s ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
 .modal-backdrop {
   position: fixed;
   inset: 0;

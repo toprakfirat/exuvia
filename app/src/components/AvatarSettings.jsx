@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { createAnimationBaker } from "../lib/animation-baker.js";
+import { buildBundle } from "../lib/avatar-bundle.js";
 import EffectsSection from "./EffectsSection.jsx";
 
 // Tabbed avatar settings.
@@ -305,6 +306,55 @@ export default function AvatarSettings({
     }
   };
 
+  const exportAvatar = async () => {
+    if (!avatar) return;
+    setSaving(true);
+    setError(null);
+    try {
+      // Read the GLB bytes from the avatar's workspace.
+      const expanded = await window.exuvia?.path?.expand?.(avatar.avatarPath);
+      const meshRes = await window.exuvia?.fbx?.read?.(expanded);
+      if (!meshRes?.ok) {
+        throw new Error(`could not read avatar mesh: ${meshRes?.error ?? "unknown"}`);
+      }
+      // Read AGENTS.md alongside SOUL.md (already loaded in state).
+      let agentsMd = "";
+      try {
+        const agentsRes = await gateway
+          .request("agents.files.get", { agentId, name: "AGENTS.md" })
+          .catch(() => null);
+        agentsMd = typeof agentsRes?.file?.content === "string" ? agentsRes.file.content : "";
+      } catch {
+        /* AGENTS.md may not exist; that's fine */
+      }
+      const meshFileName = expanded?.split(/[\\/]/).pop() || "avatar.glb";
+      const json = buildBundle({
+        agentId,
+        displayName: agentRow?.name ?? agentId,
+        avatarConfig: avatar,
+        soul,
+        agents: agentsMd,
+        meshBytes: meshRes.bytes,
+        meshFileName,
+      });
+      const safeName = String(agentRow?.name ?? agentId)
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]+/g, "-");
+      const result = await window.exuvia?.dialog?.saveTextFile?.({
+        title: "Export avatar",
+        defaultName: `${safeName}.exuvia`,
+        content: json,
+      });
+      if (!result?.ok && !result?.cancelled) {
+        throw new Error(result?.error ?? "save failed");
+      }
+    } catch (err) {
+      setError(`export failed: ${err?.message ?? err}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const updateAvatar = (patch) => setAvatar((prev) => ({ ...prev, ...patch }));
 
   // Escape key closes the modal — guarantees there's always a way out even
@@ -410,6 +460,16 @@ export default function AvatarSettings({
           {avatar ? `agent: ${agentId}` : ""}
         </span>
         <div style={{ display: "flex", gap: 8 }}>
+          {avatar && (
+            <button
+              type="button"
+              onClick={exportAvatar}
+              disabled={saving}
+              title="Export this avatar (mesh + config + SOUL/AGENTS) to a .exuvia file"
+            >
+              export…
+            </button>
+          )}
           <button onClick={onClose} disabled={saving}>cancel</button>
           <button onClick={save} disabled={saving || !avatar}>
             {saving ? "saving…" : "save"}
@@ -501,377 +561,15 @@ function VoiceTab({ avatar, updateAvatar, gateway }) {
         </span>
       </label>
 
-      <div className="section-title">Voice input (mic → text)</div>
-      <VoiceInputSetup gateway={gateway} />
-
-      <div className="section-title">Push-to-talk hotkey</div>
-      <PushToTalkBinder />
+      <span className="muted" style={{ fontSize: 11, marginTop: 6 }}>
+        Voice input (transcription provider), push-to-talk, and the global
+        show/hide hotkey are app-wide settings. Open the app settings panel
+        (⚙ in the top-right) to configure them.
+      </span>
     </>
   );
 }
 
-// Voice-input setup. Lets the user pick a transcription provider and
-// paste an API key without leaving the app. Internally:
-//   1. persists the key to Electron's encrypted local store (safeStorage)
-//      so it survives restarts but never lands in plain-text files
-//   2. injects the key as the provider's expected env var (e.g.
-//      GROQ_API_KEY) on every openclaw CLI spawn — the gateway-running
-//      process can stay un-touched
-//   3. writes tools.media.audio.models via gateway.configPatch so the
-//      CLI knows which provider/model to use
-//   4. re-runs `openclaw capability audio providers --json` so the
-//      panel reflects the live config
-//
-// Defaults to Groq because its free tier is generous enough that this
-// app stays free for personal use; user can swap to OpenAI/Deepgram
-// later if they want.
-const VOICE_PROVIDERS = [
-  {
-    id: "groq",
-    label: "Groq Whisper",
-    model: "groq/whisper-large-v3-turbo",
-    blurb: "free tier covers most personal use",
-    keyHint: "gsk_…",
-    docsUrl: "https://console.groq.com/keys",
-  },
-  {
-    id: "openai",
-    label: "OpenAI Whisper",
-    model: "openai/whisper-1",
-    blurb: "$0.006/min · needs billing set up",
-    keyHint: "sk_…",
-    docsUrl: "https://platform.openai.com/api-keys",
-  },
-  {
-    id: "deepgram",
-    label: "Deepgram Nova",
-    model: "deepgram/nova-3",
-    blurb: "$200 free credits, then $0.0043/min",
-    keyHint: "dgkey_…",
-    docsUrl: "https://console.deepgram.com",
-  },
-];
-
-function VoiceInputSetup({ gateway }) {
-  const [providerId, setProviderId] = useState("groq");
-  const [apiKey, setApiKey] = useState("");
-  const [status, setStatus] = useState(null); // { provider, configured, selected }[]
-  const [loading, setLoading] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(null);
-  const [success, setSuccess] = useState(null);
-
-  const refresh = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await window.exuvia?.openclaw?.audioProviders?.();
-      if (!res?.ok) {
-        setError(res?.error ?? "could not query providers");
-        setStatus(null);
-        return;
-      }
-      setStatus(res.providers ?? []);
-    } catch (err) {
-      setError(String(err?.message ?? err));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
-
-  const provider = VOICE_PROVIDERS.find((p) => p.id === providerId);
-  const status_ = Array.isArray(status)
-    ? status.find((s) => s?.id === providerId)
-    : null;
-
-  const save = async () => {
-    if (!provider || !apiKey.trim()) return;
-    setBusy(true);
-    setError(null);
-    setSuccess(null);
-    try {
-      const authRes = await window.exuvia?.openclaw?.authSet?.({
-        provider: provider.id,
-        apiKey: apiKey.trim(),
-      });
-      if (!authRes?.ok) {
-        setError(authRes?.error ?? "auth set failed");
-        return;
-      }
-      // Now write tools.media.audio.models so the CLI knows which
-      // provider/model to use for transcription. configPatch may close
-      // the WS mid-flight when openclaw hot-reloads; same recoverable-
-      // error handling as the wizard / settings save paths.
-      try {
-        await gateway.configPatch({
-          tools: {
-            media: {
-              audio: {
-                models: [provider.model],
-              },
-            },
-          },
-        });
-      } catch (err) {
-        const msg = String(err?.message ?? err);
-        const recoverable =
-          /gateway restarting/i.test(msg) ||
-          /socket closed/i.test(msg) ||
-          /not connected/i.test(msg);
-        if (!recoverable) throw err;
-      }
-      setApiKey("");
-      setSuccess(`saved ${provider.label}`);
-      await refresh();
-    } catch (err) {
-      setError(String(err?.message ?? err));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      <span className="muted" style={{ fontSize: 11 }}>
-        Voice input transcribes mic audio via an external provider.
-        Configure one provider here and the mic button in chat will work.
-      </span>
-
-      <div className="row" style={{ flexWrap: "wrap" }}>
-        {VOICE_PROVIDERS.map((p) => {
-          const live = Array.isArray(status)
-            ? status.find((s) => s?.id === p.id)
-            : null;
-          const dotColor = live?.selected
-            ? "#6ce28b"
-            : live?.configured
-              ? "#e2c66c"
-              : "rgba(255,255,255,0.25)";
-          return (
-            <button
-              type="button"
-              key={p.id}
-              onClick={() => setProviderId(p.id)}
-              className={providerId === p.id ? "active" : ""}
-              style={{
-                padding: "6px 10px",
-                fontSize: 11,
-                background:
-                  providerId === p.id ? "rgba(255,255,255,0.12)" : undefined,
-                border:
-                  providerId === p.id
-                    ? "1px solid var(--border-glass-strong)"
-                    : "1px solid var(--border-glass)",
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 6,
-              }}
-            >
-              <span
-                style={{
-                  width: 6,
-                  height: 6,
-                  borderRadius: "50%",
-                  background: dotColor,
-                }}
-              />
-              {p.label}
-            </button>
-          );
-        })}
-        <button
-          type="button"
-          onClick={refresh}
-          disabled={loading}
-          style={{ padding: "6px 10px", fontSize: 11, marginLeft: "auto" }}
-          title="re-check provider status"
-        >
-          {loading ? "…" : "↻"}
-        </button>
-      </div>
-
-      {provider && (
-        <>
-          <span className="muted" style={{ fontSize: 11 }}>
-            {provider.blurb}.{" "}
-            <a
-              href={provider.docsUrl}
-              onClick={(e) => {
-                e.preventDefault();
-                window.exuvia?.openExternal?.(provider.docsUrl);
-              }}
-              style={{ color: "rgba(150,180,255,0.85)" }}
-            >
-              get an API key →
-            </a>
-          </span>
-
-          <div className="field">
-            <label>API key{status_?.configured ? " (already configured)" : ""}</label>
-            <input
-              type="password"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder={status_?.configured ? "(leave blank to keep current)" : provider.keyHint}
-            />
-          </div>
-
-          <div className="row">
-            <button
-              type="button"
-              onClick={save}
-              disabled={busy || !apiKey.trim()}
-            >
-              {busy ? "saving…" : status_?.selected ? "update key" : "save & select"}
-            </button>
-            {status_?.selected && (
-              <span className="muted" style={{ fontSize: 11 }}>
-                ✓ configured and selected
-              </span>
-            )}
-            {status_?.configured && !status_?.selected && (
-              <span className="muted" style={{ fontSize: 11 }}>
-                key set, but not the active model
-              </span>
-            )}
-          </div>
-
-          {error && (
-            <span style={{ color: "#ff7878", fontSize: 11 }}>{error}</span>
-          )}
-          {success && (
-            <span style={{ color: "rgba(108,226,139,0.9)", fontSize: 11 }}>
-              {success}
-            </span>
-          )}
-        </>
-      )}
-    </div>
-  );
-}
-
-// Push-to-talk hotkey binder. Reads the current binding from the Electron
-// settings store, lets the user click "rebind" → press any key → save,
-// and broadcasts the change through a window event so ChatView's PTT
-// listener updates without a reload. Empty string disables PTT.
-function PushToTalkBinder() {
-  const [code, setCode] = useState("Space");
-  const [binding, setBinding] = useState(false);
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const cfg = await window.exuvia?.settings?.get?.();
-        if (!cancelled && typeof cfg?.voiceHotkey === "string") {
-          setCode(cfg.voiceHotkey);
-        }
-      } catch {
-        /* keep default */
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const persist = useCallback(async (next) => {
-    setSaving(true);
-    try {
-      await window.exuvia?.settings?.set?.({ voiceHotkey: next });
-      setCode(next);
-      // Broadcast so any open ChatView updates without remount.
-      window.dispatchEvent(new CustomEvent("exuvia:voice-hotkey", { detail: next }));
-    } finally {
-      setSaving(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!binding) return undefined;
-    const onKey = (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      // Esc cancels without saving; we treat it as a normal key
-      // because some users may legitimately want Esc bound.
-      // Empty string isn't a valid e.code so use a special button to
-      // disable instead.
-      setBinding(false);
-      persist(e.code);
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [binding, persist]);
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-      <span className="muted" style={{ fontSize: 11 }}>
-        Hold this key to record while it's pressed; release to send. Disabled
-        when typing into a text field. Esc cancels mid-record.
-      </span>
-      <div className="row" style={{ alignItems: "center" }}>
-        <span style={{ fontSize: 11 }}>
-          current:{" "}
-          <strong style={{ fontFamily: "ui-monospace, monospace" }}>
-            {code ? friendlyKeyCode(code) : "(disabled)"}
-          </strong>
-        </span>
-        {!binding ? (
-          <button
-            type="button"
-            onClick={() => setBinding(true)}
-            disabled={saving}
-            style={{ padding: "4px 10px", fontSize: 11 }}
-          >
-            rebind
-          </button>
-        ) : (
-          <span className="muted" style={{ fontSize: 11 }}>
-            press any key…{" "}
-            <button
-              type="button"
-              onClick={() => setBinding(false)}
-              style={{ padding: "2px 8px", fontSize: 10 }}
-            >
-              cancel
-            </button>
-          </span>
-        )}
-        <button
-          type="button"
-          onClick={() => persist("")}
-          disabled={saving || !code}
-          style={{ padding: "4px 10px", fontSize: 11, marginLeft: "auto" }}
-          title="disable push-to-talk; the mic button still works"
-        >
-          disable
-        </button>
-        <button
-          type="button"
-          onClick={() => persist("Space")}
-          disabled={saving || code === "Space"}
-          style={{ padding: "4px 10px", fontSize: 11 }}
-          title="restore the default Space binding"
-        >
-          reset
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function friendlyKeyCode(code) {
-  if (!code) return "";
-  if (code === "Space") return "Space";
-  if (code.startsWith("Key")) return code.slice(3);
-  if (code.startsWith("Digit")) return code.slice(5);
-  return code;
-}
 
 function AnimationsTab({ avatar, updateAvatar, rebake, rebakeStatus, saving }) {
   const animations = avatar.animations ?? [];

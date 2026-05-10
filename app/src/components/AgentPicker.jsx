@@ -1,4 +1,11 @@
 import React, { useCallback, useEffect, useState } from "react";
+import { importAvatarBundle } from "../lib/avatar-import.js";
+import {
+  VoiceInputSetup,
+  PushToTalkBinder,
+  ToggleWindowBinder,
+  TrayIconBinder,
+} from "./AppSettings.jsx";
 
 // SVG icon — Feather-ish lock. Two paths: shackle (bow) on top, body
 // underneath. `locked=false` opens the shackle so the same component
@@ -33,6 +40,15 @@ export function LockIcon({ locked, size = 14 }) {
 // +new-avatar action pinned to the bottom.
 // When `settingsView` is provided, the drawer renders that below the
 // top bar instead of the avatar list.
+// Tabs surfaced inside the drawer when no per-avatar settings panel is
+// active. Picking a tab swaps the body — keeps everything inside the
+// same drawer rather than scattering modals.
+const PICKER_TABS = [
+  { id: "avatars", label: "Avatars" },
+  { id: "voice-input", label: "Voice input" },
+  { id: "hotkeys", label: "Hotkeys" },
+];
+
 export default function AgentPicker({
   gateway,
   activeAgentId,
@@ -43,11 +59,19 @@ export default function AgentPicker({
   open,
   settingsView,
 }) {
+  const [tab, setTab] = useState("avatars");
   const [agents, setAgents] = useState([]);
   const [exuviaIds, setExuviaIds] = useState(new Set());
   const [error, setError] = useState(null);
   const [deletingId, setDeletingId] = useState(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  const [importing, setImporting] = useState(false);
+  const [importStatus, setImportStatus] = useState(null);
+  // Per-step status text while a delete is running. Multi-step delete
+  // (sidecar clear → agents.delete → workspace + state dir removal +
+  // refresh) can take 1–3 seconds; the "…" on the confirm button alone
+  // doesn't tell the user anything is actually happening.
+  const [deleteStatus, setDeleteStatus] = useState(null);
   // Drawer height — user-resizable via the top-edge drag handle.
   // Persisted across sessions so the chosen height survives reopens.
   const [height, setHeight] = useState(() => {
@@ -131,6 +155,7 @@ export default function AgentPicker({
     }
     inFlightRef.current.add(id);
     setDeletingId(id);
+    setDeleteStatus(`deleting ${id}…`);
     try {
       // Step 1: clear the sidecar config — only if there's actually something
       // to clear. Avoids hitting the rate limiter on ghost avatars (sidecar
@@ -138,6 +163,7 @@ export default function AgentPicker({
       // never had an exuvia sidecar in the first place.
       let hasSidecar = exuviaIds.has(id);
       if (hasSidecar) {
+        setDeleteStatus("clearing avatar config…");
         try {
           await gateway.configPatch({
             plugins: {
@@ -158,6 +184,7 @@ export default function AgentPicker({
       // workspace folders, so the only way to make a stale agent stop
       // reappearing is to remove the workspace directory itself — which we
       // do as Step 3 below.
+      setDeleteStatus("removing agent record…");
       let agentWasNotFound = false;
       try {
         await gateway.request("agents.delete", { agentId: id });
@@ -180,6 +207,7 @@ export default function AgentPicker({
         const stateDir = `${home}/.openclaw/agents/${id}`.replace(/\\/g, "/");
         const targets = [ws, stateDir].filter(Boolean);
         for (const target of targets) {
+          setDeleteStatus(`removing ${shortPath(target)}…`);
           const res = await window.exuvia.dir.remove(target);
           if (!res?.ok) {
             console.warn(`[picker] dir remove failed for ${target}: ${res?.error ?? "?"}`);
@@ -188,15 +216,56 @@ export default function AgentPicker({
           }
         }
       }
+      setDeleteStatus("refreshing…");
       setConfirmDeleteId(null);
       if (id === activeAgentId) onSelect(null);
-      refresh();
+      await refresh();
+      setDeleteStatus("deleted ✓");
     } catch (err) {
       console.error("[picker] delete failed", err);
       setError(err?.message ?? String(err));
+      setDeleteStatus(`delete failed: ${err?.message ?? err}`);
     } finally {
       inFlightRef.current.delete(id);
       setDeletingId(null);
+      // Clear the status after a moment so it doesn't linger in the UI.
+      setTimeout(() => setDeleteStatus(null), 3500);
+    }
+  };
+
+  const importAvatar = async () => {
+    if (importing) return;
+    setError(null);
+    setImportStatus(null);
+    const opened = await window.exuvia?.dialog?.openTextFile?.({
+      title: "Import avatar",
+      filters: [
+        { name: "Exuvia avatar", extensions: ["exuvia", "json"] },
+        { name: "All files", extensions: ["*"] },
+      ],
+    });
+    if (!opened || opened.cancelled) return;
+    if (!opened.ok) {
+      setError(opened.error ?? "could not open file");
+      return;
+    }
+    setImporting(true);
+    setImportStatus("starting…");
+    try {
+      const result = await importAvatarBundle(gateway, opened.content, {
+        onProgress: (p) =>
+          setImportStatus(`${p.stage}${p.detail ? ` — ${p.detail}` : ""}`),
+      });
+      setImportStatus("imported ✓");
+      await refresh();
+      if (result?.agentId) onSelect?.(result.agentId);
+    } catch (err) {
+      setError(`import failed: ${err?.message ?? err}`);
+    } finally {
+      setImporting(false);
+      // Clear status after a short delay so the success/failure note
+      // doesn't linger when the picker is reopened.
+      setTimeout(() => setImportStatus(null), 4000);
     }
   };
 
@@ -228,83 +297,142 @@ export default function AgentPicker({
       style={{ height: `${height}px` }}
     >
       {resizeHandle}
+      <div className="picker-tabs">
+        {PICKER_TABS.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            className={`picker-tab ${tab === t.id ? "active" : ""}`}
+            onClick={() => setTab(t.id)}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
       <div className="picker-body">
-      <div className="picker-section-title">avatars</div>
-
-      {error && <div className="muted" style={{ color: "#ff9a9a" }}>{error}</div>}
-      {agents.length === 0 && (
-        <div className="muted" style={{ padding: "6px 2px" }}>no agents yet</div>
-      )}
-
-      {agents.map((a) => {
-        const id = a.id ?? a.agentId ?? a.name;
-        if (!id) return null;
-        const label = a.name ?? a.label ?? id;
-        const isExuvia = exuviaIds.has(id);
-        const active = id === activeAgentId;
-        const confirming = confirmDeleteId === id;
-        const deleting = deletingId === id;
-        return (
-          <div className="picker-row" key={id}>
-            <button
-              className={`agent-pill ${active ? "active" : ""}`}
-              onClick={() => onSelect(id)}
-              title={isExuvia ? "exuvia avatar" : "plain claw agent"}
-            >
-              {isExuvia ? "" : "• "}
-              {label}
-            </button>
-            {active && (
-              <button
-                className="agent-pill picker-action"
-                onClick={() => onSettingsRequested?.(id)}
-                title="settings"
-              >
-                ⚙
-              </button>
+        {tab === "avatars" && (
+          <>
+            {error && <div className="muted" style={{ color: "#ff9a9a" }}>{error}</div>}
+            {agents.length === 0 && (
+              <div className="muted" style={{ padding: "6px 2px" }}>no agents yet</div>
             )}
-            {confirming ? (
-              <>
-                <button
-                  className="agent-pill picker-action"
-                  onClick={() => deleteAgent(id)}
-                  disabled={deleting}
-                  title={`confirm delete ${id}`}
-                  style={{ borderColor: "#7a3a3a", color: "#ff9a9a" }}
-                >
-                  {deleting ? "…" : "✓"}
-                </button>
-                <button
-                  className="agent-pill picker-action"
-                  onClick={() => setConfirmDeleteId(null)}
-                  disabled={deleting}
-                  title="cancel"
-                >
-                  ⨯
-                </button>
-              </>
-            ) : (
-              <button
-                className="agent-pill picker-action"
-                onClick={() => setConfirmDeleteId(id)}
-                title={`delete ${id}`}
-                style={{ color: "var(--text-muted)" }}
-              >
-                ×
-              </button>
-            )}
-          </div>
-        );
-      })}
 
-      <button
-        className="agent-pill picker-create"
-        onClick={onCreateRequested}
-        disabled={gateway.status !== "connected"}
-      >
-        + new avatar
-      </button>
+            {agents.map((a) => {
+              const id = a.id ?? a.agentId ?? a.name;
+              if (!id) return null;
+              const label = a.name ?? a.label ?? id;
+              const isExuvia = exuviaIds.has(id);
+              const active = id === activeAgentId;
+              const confirming = confirmDeleteId === id;
+              const deleting = deletingId === id;
+              return (
+                <div className="picker-row" key={id}>
+                  <button
+                    className={`agent-pill ${active ? "active" : ""}`}
+                    onClick={() => onSelect(id)}
+                    title={isExuvia ? "exuvia avatar" : "plain claw agent"}
+                  >
+                    {isExuvia ? "" : "• "}
+                    {label}
+                  </button>
+                  {active && (
+                    <button
+                      className="agent-pill picker-action"
+                      onClick={() => onSettingsRequested?.(id)}
+                      title="settings"
+                    >
+                      ⚙
+                    </button>
+                  )}
+                  {confirming ? (
+                    <>
+                      <button
+                        className="agent-pill picker-action"
+                        onClick={() => deleteAgent(id)}
+                        disabled={deleting}
+                        title={`confirm delete ${id}`}
+                        style={{ borderColor: "#7a3a3a", color: "#ff9a9a" }}
+                      >
+                        {deleting ? "…" : "✓"}
+                      </button>
+                      <button
+                        className="agent-pill picker-action"
+                        onClick={() => setConfirmDeleteId(null)}
+                        disabled={deleting}
+                        title="cancel"
+                      >
+                        ⨯
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      className="agent-pill picker-action"
+                      onClick={() => setConfirmDeleteId(id)}
+                      title={`delete ${id}`}
+                      style={{ color: "var(--text-muted)" }}
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+
+            <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+              <button
+                className="agent-pill picker-create"
+                onClick={onCreateRequested}
+                disabled={gateway.status !== "connected" || importing}
+                style={{ flex: 1 }}
+              >
+                + new avatar
+              </button>
+              <button
+                className="agent-pill picker-create"
+                onClick={importAvatar}
+                disabled={gateway.status !== "connected" || importing}
+                title="Import an avatar from a .exuvia bundle"
+                style={{ flex: 1 }}
+              >
+                {importing ? "importing…" : "↥ import"}
+              </button>
+            </div>
+            {importStatus && (
+              <div className="muted" style={{ fontSize: 10, marginTop: 4 }}>
+                {importStatus}
+              </div>
+            )}
+            {deleteStatus && (
+              <div className="muted" style={{ fontSize: 10, marginTop: 4 }}>
+                {deleteStatus}
+              </div>
+            )}
+          </>
+        )}
+        {tab === "voice-input" && <VoiceInputSetup gateway={gateway} />}
+        {tab === "hotkeys" && (
+          <>
+            <div className="picker-section-title">push-to-talk</div>
+            <PushToTalkBinder />
+            <div className="picker-section-title" style={{ marginTop: 10 }}>
+              show / hide window
+            </div>
+            <ToggleWindowBinder />
+            <div className="picker-section-title" style={{ marginTop: 10 }}>
+              tray icon
+            </div>
+            <TrayIconBinder />
+          </>
+        )}
       </div>
     </aside>
   );
+}
+
+// Trim a path so the status line stays readable: keep the last two
+// segments. e.g. C:\Users\PC\.openclaw\workspace-foo → workspace-foo
+function shortPath(p) {
+  if (typeof p !== "string" || !p) return "";
+  const parts = p.split(/[\\/]+/).filter(Boolean);
+  return parts.slice(-1).join("/") || p;
 }
