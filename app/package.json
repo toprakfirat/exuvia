@@ -9,7 +9,10 @@
     "dev": "vite",
     "dev:electron": "concurrently -k \"vite\" \"wait-on http://localhost:5173 && electron .\"",
     "build": "vite build",
-    "start": "electron ."
+    "start": "electron .",
+    "dist": "pnpm build && electron-builder --win --x64",
+    "dist:linux": "pnpm build && electron-builder --linux --x64",
+    "dist:dir": "pnpm build && electron-builder --dir"
   },
   "dependencies": {
     "react": "^18.3.1",
@@ -21,7 +24,59 @@
     "@vitejs/plugin-react": "^4.3.0",
     "concurrently": "^9.0.0",
     "electron": "^33.0.0",
+    "electron-builder": "^25.1.8",
     "vite": "^5.4.0",
     "wait-on": "^8.0.0"
+  },
+  "build": {
+    "appId": "ai.exuvia.app",
+    "productName": "exuvia",
+    "directories": {
+      "output": "dist-electron",
+      "buildResources": "public"
+    },
+    "files": [
+      "electron-main.cjs",
+      "preload.cjs",
+      "dist/**/*",
+      "public/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../plugin",
+        "to": "plugin",
+        "filter": [
+          "package.json",
+          "openclaw.plugin.json",
+          "README.md",
+          "dist/**/*",
+          "src/**/*",
+          "tsconfig.json"
+        ]
+      }
+    ],
+    "asarUnpack": [],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "public/tray-icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "exuvia"
+    },
+    "linux": {
+      "target": ["AppImage"],
+      "category": "Utility",
+      "icon": "public/tray-icon.png"
+    }
   }
 }

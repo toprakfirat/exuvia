@@ -694,9 +694,118 @@ if (!gotInstanceLock) {
   });
 }
 
-app.whenReady().then(() => {
+// Locate the bundled plugin source. In a packaged app the plugin lives
+// alongside the asar at process.resourcesPath/plugin. In dev (running
+// from source), the plugin is one level up from the app directory.
+function resolveBundledPluginPath() {
+  const candidates = app.isPackaged
+    ? [
+        path.join(process.resourcesPath, "plugin"),
+        path.join(process.resourcesPath, "app.asar.unpacked", "plugin"),
+      ]
+    : [
+        path.join(__dirname, "..", "plugin"),
+      ];
+  for (const c of candidates) {
+    try {
+      if (c && fs.existsSync(c) && fs.existsSync(path.join(c, "package.json"))) {
+        return c;
+      }
+    } catch {
+      /* skip */
+    }
+  }
+  return null;
+}
+
+// Run `openclaw plugins install --link <pluginPath>` if the user
+// doesn't already have an exuvia plugin registered. Runs once on first
+// launch — the openclaw side is idempotent so a second run is a no-op,
+// but we skip the spawn entirely if the install marker exists. Returns
+// { ok, skipped, error } so we can surface results in the UI.
+async function ensurePluginInstalled() {
+  // Marker: ~/.openclaw/extensions/exuvia/dist/index.js. If it exists,
+  // openclaw has already discovered our plugin and we don't need to
+  // run the install command again.
+  const home = require("node:os").homedir();
+  const installedMarker = path.join(home, ".openclaw", "extensions", "exuvia", "dist", "index.js");
+  if (fs.existsSync(installedMarker)) {
+    return { ok: true, skipped: true, reason: "already-installed" };
+  }
+  const pluginPath = resolveBundledPluginPath();
+  if (!pluginPath) {
+    return { ok: false, error: "bundled plugin not found in app resources" };
+  }
+  // Spawn openclaw plugins install --link <path>. If openclaw isn't on
+  // PATH the spawn returns ENOENT; we surface that explicitly so the
+  // user knows to install openclaw first.
+  const { spawn } = require("node:child_process");
+  return await new Promise((resolve) => {
+    let stdout = "";
+    let stderr = "";
+    let proc;
+    try {
+      proc = spawn("openclaw", ["plugins", "install", "--link", pluginPath], {
+        shell: true,
+        env: process.env,
+      });
+    } catch (err) {
+      resolve({ ok: false, error: `spawn failed: ${String(err?.message ?? err)}` });
+      return;
+    }
+    proc.stdout.on("data", (c) => (stdout += c.toString()));
+    proc.stderr.on("data", (c) => (stderr += c.toString()));
+    proc.on("error", (err) => {
+      const msg = String(err?.message ?? err);
+      // ENOENT here = openclaw not on PATH. Tell the user clearly.
+      const friendly = /ENOENT/.test(msg)
+        ? "openclaw is not installed or not on PATH. Install openclaw first: https://docs.openclaw.ai/start/getting-started"
+        : msg;
+      resolve({ ok: false, error: friendly });
+    });
+    proc.on("close", (code) => {
+      if (code !== 0) {
+        resolve({
+          ok: false,
+          error: stderr.trim() || stdout.trim() || `exit ${code}`,
+        });
+        return;
+      }
+      resolve({ ok: true, skipped: false });
+    });
+  });
+}
+
+// Renderer can ask for the current plugin-install status (e.g. to show
+// a banner if it's missing). Re-runs the same check the boot path uses.
+ipcMain.handle("exuvia:plugin:status", async () => {
+  const home = require("node:os").homedir();
+  const installedMarker = path.join(home, ".openclaw", "extensions", "exuvia", "dist", "index.js");
+  return { installed: fs.existsSync(installedMarker) };
+});
+
+// Renderer can ask us to (re-)run the install on demand. Used by the
+// "install plugin" button in the connection-error / first-run UI.
+ipcMain.handle("exuvia:plugin:install", async () => {
+  return await ensurePluginInstalled();
+});
+
+app.whenReady().then(async () => {
   setupTray();
   createWindow();
+  // Try to install the bundled plugin on first launch. Failures don't
+  // block the app — the user can retry from the UI or install
+  // openclaw first if needed.
+  try {
+    const r = await ensurePluginInstalled();
+    if (r.ok && !r.skipped) {
+      console.log("[plugin] installed bundled plugin into ~/.openclaw");
+    } else if (!r.ok) {
+      console.warn("[plugin] auto-install failed:", r.error);
+    }
+  } catch (err) {
+    console.warn("[plugin] auto-install threw:", err);
+  }
   // Restore the user's saved toggle hotkey (if any) so it's live from
   // boot. Failures are non-fatal — the user can rebind from the UI.
   const saved = loadSettings();

@@ -1,4 +1,4 @@
-# exuvia
+# Exuvia
 
 A character-first AI assistant. Drop in a 3D avatar, give it a voice and a
 soul, and talk to it. Same character lives in your desktop tray and on chat
@@ -62,6 +62,10 @@ On first launch you'll be asked for your openclaw gateway token (from
 keychain — you won't be asked again.
 
 ### Make your first avatar
+
+> Don't have a 3D model handy? There's a sample at
+> [`examples/avatar.glb`](./examples/avatar.glb) — drop that into the
+> wizard to skip ahead.
 
 1. Click the **+ new avatar** button in the picker
 2. Drop in a `.glb` (or `.fbx`)

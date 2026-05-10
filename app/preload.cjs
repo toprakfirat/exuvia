@@ -38,6 +38,10 @@ contextBridge.exposeInMainWorld("exuvia", {
     resetIcon: () => ipcRenderer.invoke("exuvia:tray:resetIcon"),
     getIconInfo: () => ipcRenderer.invoke("exuvia:tray:getIconInfo"),
   },
+  plugin: {
+    status: () => ipcRenderer.invoke("exuvia:plugin:status"),
+    install: () => ipcRenderer.invoke("exuvia:plugin:install"),
+  },
   dialog: {
     openFile: (opts) => ipcRenderer.invoke("exuvia:dialog:openFile", opts),
     openTextFile: (opts) => ipcRenderer.invoke("exuvia:dialog:openTextFile", opts),
