@@ -1,7 +1,7 @@
 {
   "name": "exuvia",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Character-first AI assistant on top of openclaw.",
   "packageManager": "pnpm@9.0.0",
   "engines": {
