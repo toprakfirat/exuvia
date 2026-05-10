@@ -25,3 +25,7 @@ pnpm-debug.log*
 # electron build outputs
 release/
 app/dist-electron/
+
+# Claude Code local agent state — permission grants and paths that
+# don't belong in a public repo.
+.claude/
