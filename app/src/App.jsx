@@ -359,6 +359,10 @@ export default function App() {
             <AvatarScene
               ref={sceneRef}
               avatarPath={avatar.avatarPath}
+              // Force re-run of the avatar load effect without remounting
+              // the scene's WebGL context. Bumped after wizard commit so a
+              // delete+recreate at the same path still reloads the mesh.
+              reloadToken={avatarRefreshKey}
               scale={avatar.fbxScale}
               environmentHdriPath={avatar.environmentHdriPath ?? null}
               environmentIntensity={
@@ -458,6 +462,21 @@ export default function App() {
           onCreated={(agentId) => {
             setCreatorOpen(false);
             setPickerRefreshKey((n) => n + 1);
+            // Force a fresh config.get even when the new slug equals the
+            // currently-active one (delete-then-recreate with the same
+            // default slug is a common case — without this bump,
+            // useAvatarConfig sees no dep change and the scene stays on
+            // the stale avatar state).
+            setAvatarRefreshKey((n) => n + 1);
+            // Make sure the chat bar comes back: if the user got here
+            // through the settings panel of a now-deleted avatar (or
+            // left the picker open from a prior flow), clear those so
+            // the bottom-bar's `cameraLocked && !pickerOpen
+            // && !settingsAgentId` gate flips to true and ChatView
+            // mounts for the freshly-created agent.
+            setPickerOpen(false);
+            setSettingsAgentId(null);
+            setPreviewAvatar(null);
             setActiveAgentId(agentId);
           }}
         />

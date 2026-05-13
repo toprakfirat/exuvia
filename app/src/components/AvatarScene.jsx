@@ -157,6 +157,10 @@ const AvatarScene = forwardRef(function AvatarScene(
     // backward-compat aliases for callers that still pass fbxPath/fbxScale
     fbxPath,
     fbxScale,
+    // Bumping this re-runs the avatar load effect without remounting the
+    // WebGL context. Useful when the avatar config was replaced at the
+    // same path (delete + recreate with the same slug).
+    reloadToken,
     postProcessing,
     onLoad,
     onError,
@@ -214,6 +218,10 @@ const AvatarScene = forwardRef(function AvatarScene(
   }
   const animationFrameRef = useRef(null);
   const oneShotTimerRef = useRef(null);
+  // RAF handle for the avatar's "fade in from invisible" ramp on load.
+  // Cancelled when the load effect re-runs so an in-flight ramp doesn't
+  // race a new avatar's fade.
+  const fadeRafRef = useRef(null);
   const enabledSignatureRef = useRef("");
 
   const [status, setStatus] = useState("idle");
@@ -911,16 +919,12 @@ const AvatarScene = forwardRef(function AvatarScene(
           resolvedScale != null ? resolvedScale : defaultScaleFor(format);
         object.userData.isAvatar = true;
         object.scale.setScalar(effectiveScale);
-        scene.add(object);
 
-        // Force every material in the freshly-loaded mesh to recompile.
-        // FBX/GLTF materials cache a shader program based on the scene
-        // state at the moment the renderer first draws them. If lights
-        // or scene.environment landed BEFORE the model (which they
-        // usually do — the load is async, lights are sync), three.js can
-        // bind a stale program that ignores them. Setting needsUpdate
-        // marks the program for rebuild on the next frame, picking up
-        // current lights + env automatically.
+        // Collect every material so we can fade the mesh in. Without this,
+        // the avatar pops into view in its T-pose (or whatever the bind
+        // pose is) for one frame before the idle clip's first sample lands
+        // — visible as a brief skeleton-arms-out flash on every load.
+        const fadeMaterials = [];
         object.traverse((child) => {
           if (!child.isMesh) return;
           const mats = Array.isArray(child.material)
@@ -935,9 +939,20 @@ const AvatarScene = forwardRef(function AvatarScene(
             if ("envMapIntensity" in m && m.envMapIntensity == null) {
               m.envMapIntensity = 1;
             }
+            m.transparent = true;
+            // Remember whatever opacity the asset shipped with so we can
+            // restore it (some PBR materials use alpha < 1 intentionally).
+            if (m.userData.baseOpacity == null) {
+              m.userData.baseOpacity = m.opacity ?? 1;
+            }
+            m.opacity = 0;
+            m.depthWrite = false; // avoid z-fighting while alpha < 1
             m.needsUpdate = true;
+            fadeMaterials.push(m);
           }
         });
+
+        scene.add(object);
 
         const mixer = new THREE.AnimationMixer(object);
         mixerRef.current = mixer;
@@ -961,11 +976,57 @@ const AvatarScene = forwardRef(function AvatarScene(
         idlePoolRef.current = idlePool;
         const idle = pickIdleVariant(idlePool, null);
         if (idle) {
-          idle.action.reset().fadeIn(CROSSFADE_MS / 1000).play();
+          // Apply the idle pose immediately at full weight (no fadeIn) so
+          // the very first rendered frame already shows the idle pose,
+          // not the bind pose. Then sample once at t=0 to push the bone
+          // matrices through before the renderer draws.
+          idle.action.reset();
+          idle.action.setEffectiveWeight(1);
+          idle.action.play();
+          mixer.update(0);
           idleActionRef.current = idle.action;
           currentActionRef.current = idle.action;
           emitAnimationChange(idle);
         }
+
+        // Fade mesh opacity from 0 → baseOpacity over FADE_IN_MS.
+        // Driven off requestAnimationFrame so the ramp shares the render
+        // loop's pacing. We track the active fade in a ref so a rapid
+        // re-load (e.g. avatar swap mid-fade) can cancel the old ramp
+        // instead of fighting it.
+        cancelAnimationFrame(fadeRafRef.current ?? 0);
+        const FADE_IN_MS = 700;
+        const fadeStart = performance.now();
+        const stepFade = (now) => {
+          const t = Math.min(1, (now - fadeStart) / FADE_IN_MS);
+          // Smoothstep for a gentler ease than linear.
+          const k = t * t * (3 - 2 * t);
+          for (const m of fadeMaterials) {
+            const base = m.userData.baseOpacity ?? 1;
+            m.opacity = base * k;
+          }
+          if (t < 1) {
+            fadeRafRef.current = requestAnimationFrame(stepFade);
+          } else {
+            // Restore materials to their original blending mode so the
+            // depth buffer behaves normally once the avatar is fully
+            // visible. Only flip back to opaque for materials that
+            // started opaque — keep transparency for ones that needed it.
+            for (const m of fadeMaterials) {
+              const base = m.userData.baseOpacity ?? 1;
+              m.opacity = base;
+              if (base >= 1) {
+                m.transparent = false;
+                m.depthWrite = true;
+              } else {
+                m.depthWrite = true;
+              }
+              m.needsUpdate = true;
+            }
+            fadeRafRef.current = null;
+          }
+        };
+        fadeRafRef.current = requestAnimationFrame(stepFade);
 
         setStatus("ready");
         // Force a recompile of materials so they pick up the current
@@ -1004,11 +1065,15 @@ const AvatarScene = forwardRef(function AvatarScene(
       idleActionRef.current = null;
       currentActionRef.current = null;
       clearTimeout(oneShotTimerRef.current);
+      if (fadeRafRef.current != null) {
+        cancelAnimationFrame(fadeRafRef.current);
+        fadeRafRef.current = null;
+      }
       for (const child of [...scene.children]) {
         if (child.userData?.isAvatar) scene.remove(child);
       }
     };
-  }, [resolvedPath, resolvedScale]);
+  }, [resolvedPath, resolvedScale, reloadToken]);
 
   function crossfadeTo(entry) {
     if (!entry || !mixerRef.current) return;
@@ -1084,10 +1149,11 @@ const AvatarScene = forwardRef(function AvatarScene(
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            color: "rgba(255,255,255,0.35)",
-            fontSize: 13,
+            color: status === "error" ? "#ff9a9a" : "rgba(255,255,255,0.82)",
+            fontSize: 14,
             letterSpacing: "0.4px",
             pointerEvents: "none",
+            textShadow: "0 1px 3px rgba(0,0,0,0.6)",
           }}
         >
           {status === "loading" && "loading avatar…"}

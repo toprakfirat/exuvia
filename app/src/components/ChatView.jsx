@@ -25,34 +25,19 @@ export default function ChatView({ gateway, agentId, onToolCall, onMessages }) {
     }
   }, [messages.length, latestRole]);
 
-  if (!agentId) {
-    return (
-      <div className="chat">
-        <div className="messages">
-          <span className="muted">Pick an avatar to start chatting.</span>
-        </div>
-      </div>
-    );
-  }
-
-  const submit = async (e) => {
-    e.preventDefault();
-    const text = draft.trim();
-    if (!text) return;
-    setDraft("");
-    try {
-      await send(text);
-    } catch (err) {
-      console.error("send failed", err);
-    }
-  };
-
   // Voice input. The transcript is auto-sent (no manual confirmation step)
   // so a hold-to-talk session feels conversational. If the user has typed
   // something into the composer already, we append the transcript instead
   // of stomping it.
+  //
+  // Hook order: this and the pttKeyCode hooks must stay ABOVE the
+  // `if (!agentId) return` below — flipping agentId between truthy and
+  // falsy across renders would otherwise add/remove hook calls and trip
+  // React error #310 ("rendered more hooks than during the previous
+  // render"), white-screening the whole app.
   const voice = useVoiceInput({
     onTranscript: async (text) => {
+      if (!agentId) return;
       const merged = draft.trim() ? `${draft.trim()} ${text}` : text;
       setDraft("");
       try {
@@ -62,12 +47,6 @@ export default function ChatView({ gateway, agentId, onToolCall, onMessages }) {
       }
     },
   });
-
-  const toggleVoice = () => {
-    if (voice.state === "recording") voice.stop();
-    else if (voice.state === "transcribing") return;
-    else voice.start();
-  };
 
   // Push-to-talk hotkey. Reads the user's configured key code from the
   // Electron settings store (default "Space"). Active only when no
@@ -137,6 +116,38 @@ export default function ChatView({ gateway, agentId, onToolCall, onMessages }) {
       window.removeEventListener("keyup", onUp);
     };
   }, [voice, pttKeyCode]);
+
+  // Early-return AFTER all hooks: flipping `agentId` between truthy and
+  // falsy was previously skipping the hook calls below, tripping React
+  // error #310 the next time agentId came back. Now the hooks always
+  // run; only the rendered output branches.
+  if (!agentId) {
+    return (
+      <div className="chat">
+        <div className="messages">
+          <span className="muted">Pick an avatar to start chatting.</span>
+        </div>
+      </div>
+    );
+  }
+
+  const submit = async (e) => {
+    e.preventDefault();
+    const text = draft.trim();
+    if (!text) return;
+    setDraft("");
+    try {
+      await send(text);
+    } catch (err) {
+      console.error("send failed", err);
+    }
+  };
+
+  const toggleVoice = () => {
+    if (voice.state === "recording") voice.stop();
+    else if (voice.state === "transcribing") return;
+    else voice.start();
+  };
 
   // Display-time dedupe. The gateway emits the same logical message
   // multiple times across event families (session.message + chat) and
