@@ -433,3 +433,9 @@ source)](#install-from-source) steps above.
 ## License
 
 Apache License 2.0 — see [LICENSE](./LICENSE).
+
+### Third-party assets
+
+- **"Goth kitty girl"** by [Rotmill](https://sketchfab.com/Rotmill) — licensed under
+  [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Source:
+  [Sketchfab](https://sketchfab.com/3d-models/goth-kitty-girl-0e9046bbb618443485df9e7ef5f32c1e).
