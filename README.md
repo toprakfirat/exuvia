@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/<you>/exuvia/releases"><img alt="release" src="https://img.shields.io/github/v/release/<you>/exuvia?label=download&color=ff7a3a" /></a>
+  <a href="https://github.com/toprakfirat/Exuvia/releases"><img alt="release" src="https://img.shields.io/github/v/release/toprakfirat/Exuvia?label=download&color=ff7a3a" /></a>
   <a href="./LICENSE"><img alt="license" src="https://img.shields.io/badge/license-Apache%202.0-blue" /></a>
   <a href="https://docs.openclaw.ai"><img alt="openclaw" src="https://img.shields.io/badge/built%20on-openclaw-6cf" /></a>
 </p>
@@ -156,7 +156,7 @@ taskbar.
 ### Install (the easy way)
 
 Grab the latest installer from the
-[**Releases page**](https://github.com/<you>/exuvia/releases) and run it.
+[**Releases page**](https://github.com/toprakfirat/Exuvia/releases) and run it.
 
 **Windows** — download `exuvia Setup x.y.z.exe` and double-click. On
 the first run Windows SmartScreen will warn that the app is unsigned;
@@ -180,7 +180,7 @@ stored encrypted in your OS keychain — you won't be asked again.
 If you want to hack on exuvia or run unreleased code:
 
 ```bash
-git clone https://github.com/<you>/exuvia
+git clone https://github.com/toprakfirat/Exuvia
 cd exuvia
 pnpm install
 
