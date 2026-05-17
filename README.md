@@ -24,7 +24,7 @@ In the app, you can create different avatars with custom GLB or FBX files with e
 > the same suit on every surface; this is the shell it wears.
 
 <p align="center">
-  <video src="https://github.com/toprakfirat/exuvia/raw/main/docs/header.mp4" alt="exuvia post-fx" width="600" autoplay loop muted playsinline></video>
+  <video src="./docs/header.mp4" width="600" autoplay loop muted playsinline></video>
 </p>
 
 
@@ -221,14 +221,14 @@ Output lands in `app/dist-electron/`.
 Now talk to it.
 
 <p align="center">
-  <video src="https://github.com/toprakfirat/exuvia/raw/main/docs/tutorial.mp4" alt="exuvia tutorial" width="720" autoplay loop muted playsinline></video>
+  <video src="./docs/tutorial.mp4" width="720" autoplay loop muted playsinline></video>
 </p>
 
 
 ## Making the Avatar cool
 
 <p align="center">
-  <video src="https://github.com/toprakfirat/exuvia/raw/main/docs/fx.mp4" alt="exuvia post-fx" width="300" autoplay loop muted playsinline></video>
+  <video src="./docs/fx.mp4" width="300" autoplay loop muted playsinline></video>
 </p>
 
 
