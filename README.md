@@ -5,8 +5,7 @@
 <h1 align="center">exuvia</h1>
 
 <p align="center">
-  <em>A character-first AI assistant.</em><br />
-  Drop in a 3D avatar, give it a voice and a soul, and talk to it.
+  <em>A character and aesthetic-first AI assistant.</em><br />
 </p>
 
 <p align="center">
@@ -17,12 +16,17 @@
 
 ---
 
-Same character lives in your desktop tray and on chat platforms (Telegram,
-WhatsApp, Discord) via the standard
-[openclaw](https://docs.openclaw.ai) channel bridge.
+This project was originally an end to end AI agent I started to learn about the patterns and how to of building an AI agent. The ultimate goal was to finally achieve a helpful AI assistant that also is not just a chat screen or a boring looking character but an *AURA FARMING CYBER PERSONALITY* that I'd enjoy spending time with. After building the foundations and connecting my agent with different MCPs, I got kinda bored with researching and managing and debugging tool calls so I decided to just use [openclaw](https://docs.openclaw.ai) for backend. I still have the original project in a different private repo but I wanted to share the vibecoded avatar part which just works as a client to your local openclaw's websocket gateway.
+
+In the app, you can create different avatars with custom GLB or FBX files with embedded animations, which is corresponding to separate openclaw sessions, give them persoanlities, modify environme, customize lights and HDRIs and fx to make them look cool and fit in with your computer. You can also connect your avatar with channels to keep talking to them. 
 
 > *Exuviation* — the act of shedding a shell. Your AI doesn't have to wear
-> the same suit on every surface; this is the shell it wears in your head.
+> the same suit on every surface; this is the shell it wears.
+
+<p align="center">
+  <video src="https://github.com/toprakfirat/exuvia/raw/main/docs/header.mp4" alt="exuvia post-fx" width="600" autoplay loop muted playsinline></video>
+</p>
+
 
 ---
 
@@ -38,9 +42,10 @@ WhatsApp, Discord) via the standard
   you want, each with color, intensity, and position), then layer on
   post-FX: bloom, distance blur, barrel distortion, color grading,
   vignette, film grain. Drag the sliders, watch the scene update live.
-- **Voice in, voice out.** Hold space (or your custom hotkey) to talk;
-  transcripts go straight to the avatar. The avatar replies with TTS,
-  word-by-word reveal in chat, animation cues on emotional beats.
+- **Voice in, voice out.** Hold Space (or your custom hotkey) to talk;
+  the transcript goes straight to the avatar. The avatar replies with
+  TTS audio, a word-by-word reveal in chat, and animation cues on
+  emotional beats.
 - **Lives in your tray.** Closing the window hides to the system tray.
   Bind a global hotkey (Ctrl+Shift+E or whatever you like) to summon the
   avatar from anywhere on your system.
@@ -62,15 +67,101 @@ WhatsApp, Discord) via the standard
   uses openclaw as its agent runtime; without it the app can't do
   anything.
 
+### Run the openclaw gateway
+
+exuvia talks to a local openclaw gateway over WebSocket (default
+`ws://127.0.0.1:18789`). The gateway must be running before you launch
+the desktop app — otherwise the UI sits in `disconnected` and the first
+request hangs.
+
+```bash
+# in any terminal — leave it running
+openclaw gateway
+```
+
+The first time you run it, openclaw creates `~/.openclaw/openclaw.json`
+and prints a `sharedSecret`. exuvia's setup dialog asks for that value
+on first launch; after pairing it's stored encrypted in your OS keychain
+and you won't be asked again.
+
+Common gateway commands:
+
+```bash
+openclaw gateway              # start the WebSocket gateway (foreground)
+openclaw status               # check whether the gateway is running
+openclaw plugins list         # confirm the exuvia plugin is installed
+openclaw plugins install --link ./plugin   # install/link this repo's plugin
+```
+
+If the gateway is running at a different address, change `gatewayUrl`
+in exuvia's setup dialog (or directly in
+`%APPDATA%/exuvia/settings.json` on Windows /
+`~/Library/Application Support/exuvia/settings.json` on macOS /
+`~/.config/exuvia/settings.json` on Linux).
+
+#### Do I have to keep a terminal open?
+
+The gateway is a long-running process — yes, *something* has to keep it
+alive while exuvia is in use. But you don't need a visible terminal
+window forever. Three options, from "quick and dirty" to "set and
+forget":
+
+**Detached terminal (quickest)**
+
+Start the gateway once, then close/hide the window. The process keeps
+running until you log out or reboot.
+
+- Windows (PowerShell): `Start-Process openclaw -ArgumentList 'gateway' -WindowStyle Hidden`
+- macOS / Linux: `nohup openclaw gateway >/dev/null 2>&1 &`
+- Anywhere with `tmux`: `tmux new -d -s openclaw 'openclaw gateway'`
+
+To stop it later, find the process (`Get-Process openclaw` /
+`pgrep openclaw`) and kill it.
+
+**Background service (set and forget)**
+
+Run the gateway at login, no terminal involved, restart on crash. This
+is what you want once you're using exuvia daily.
+
+- **Windows** — wrap it as a service with [NSSM](https://nssm.cc/):
+  ```powershell
+  nssm install openclaw "C:\path\to\openclaw.exe" gateway
+  nssm set openclaw Start SERVICE_AUTO_START
+  nssm start openclaw
+  ```
+- **macOS** — write `~/Library/LaunchAgents/ai.openclaw.gateway.plist`
+  with `RunAtLoad=true` and `KeepAlive=true`, then
+  `launchctl load ~/Library/LaunchAgents/ai.openclaw.gateway.plist`.
+- **Linux** — a user systemd unit at
+  `~/.config/systemd/user/openclaw.service`:
+  ```ini
+  [Service]
+  ExecStart=/usr/local/bin/openclaw gateway
+  Restart=on-failure
+  [Install]
+  WantedBy=default.target
+  ```
+  Then `systemctl --user enable --now openclaw`.
+
+**Just leave the terminal open**
+
+Honestly fine if you only use exuvia occasionally. The gateway is
+lightweight; the only cost is the window taking up a slot on your
+taskbar.
+
+> *Future plan:* exuvia will eventually auto-spawn the gateway on
+> launch and shut it down on quit, so users never see a terminal. Not
+> implemented yet — track the issue if you'd like to push for it.
+
 ### Install (the easy way)
 
 Grab the latest installer from the
 [**Releases page**](https://github.com/<you>/exuvia/releases) and run it.
 
-**Windows** — download `exuvia Setup x.y.z.exe`, double-click.
-On the first run Windows SmartScreen will warn that the app is unsigned;
-click *More info → Run anyway*. Installer adds a desktop shortcut, a
-Start Menu entry, and the app starts in your system tray.
+**Windows** — download `exuvia Setup x.y.z.exe` and double-click. On
+the first run Windows SmartScreen will warn that the app is unsigned;
+click *More info → Run anyway*. The installer adds a desktop shortcut
+and a Start Menu entry, and the app starts in your system tray.
 
 **macOS** — download `exuvia-x.y.z-universal.dmg`, open it, drag exuvia
 to Applications. The first time you launch, macOS blocks it because the
@@ -129,7 +220,18 @@ Output lands in `app/dist-electron/`.
 
 Now talk to it.
 
----
+<p align="center">
+  <video src="https://github.com/toprakfirat/exuvia/raw/main/docs/tutorial.mp4" alt="exuvia tutorial" width="720" autoplay loop muted playsinline></video>
+</p>
+
+
+## Making the Avatar cool
+
+<p align="center">
+  <video src="https://github.com/toprakfirat/exuvia/raw/main/docs/fx.mp4" alt="exuvia post-fx" width="300" autoplay loop muted playsinline></video>
+</p>
+
+
 
 ## Daily use
 
@@ -176,7 +278,8 @@ matter for the look:
   feel like different apps.
 
 Everything lives on the avatar, so each character can have its own mood
-— a hard-edged sci-fi look for one avatar, soft warm tones for another.
+— a hard-edged sci-fi look for one avatar, soft and warm tones for
+another.
 
 ### Sharing avatars
 
@@ -194,7 +297,7 @@ tab, pick one:
 
 - **Groq** — free tier, generous quota (recommended)
 - **OpenAI Whisper** — $0.006/min, requires billing
-- **Deepgram** — $200 free credits then $0.0043/min
+- **Deepgram** — $200 free credits, then $0.0043/min
 
 Paste the API key, hit save. Done.
 
@@ -209,14 +312,15 @@ it's plain JSON if you want to.
 
 Per-avatar:
 
-- `avatarPath` — GLB/FBX on disk
-- `userAddress` — how the avatar calls you
-- `personalityRewrite` — second LLM pass to enforce voice (slower, more
-  in-character)
+- `avatarPath` — path to the GLB/FBX on disk
+- `userAddress` — what the avatar calls you
+- `personalityRewrite` — a second LLM pass that enforces the avatar's
+  voice (slower, more in-character)
 - `voiceLocallyEnabled`, `voiceOnChannels` — where TTS plays
-- `animations` — clip catalogue with names, tags, descriptions
-- `environmentHdriPath`, `scenePath`, `lights`, `postProcessing` — look
-- and a stack of post-FX knobs (bloom, color grading, film grain, etc.)
+- `animations` — clip catalogue with names, tags, and descriptions
+- `environmentHdriPath`, `scenePath`, `lights`, `postProcessing` — the
+  look, plus a full stack of post-FX knobs (bloom, color grading, film
+  grain, and so on)
 
 App-wide (Electron settings.json):
 
@@ -275,27 +379,54 @@ the Voice input tab.
 
 **Replies start with `[Thinking]` or stage directions like "(rolls eyes)"**
 The model is leaking chain-of-thought or roleplay narration. The app
-strips most of it client-side, but if you're seeing them: try a stronger
+strips most of it client-side, but if you're seeing it: try a stronger
 model, or toggle off the **Force-rewrite replies in voice** option in
-Identity tab.
+the Identity tab.
 
 **Gateway disconnects when I save settings**
 Expected — openclaw hot-reloads the plugin runtime when its config
-changes, which closes the WS briefly. The app reconnects automatically.
+changes, which closes the websocket briefly. The app reconnects
+automatically.
+
+**Something looks stuck — black scene, frozen chat, the spinner won't go away**
+Refresh the renderer: **Ctrl+R** (Windows / Linux) or **⌘+R** (macOS).
+That reloads the Electron renderer without restarting the app or the
+gateway — fastest way out of any transient UI hiccup (mid-load shader
+race, dangling subscription after a plugin hot-reload, stale chat
+session, etc.). If a refresh doesn't help, fully quit from the tray icon
+and reopen.
+
+**First request after starting the gateway hangs for 30–60 seconds**
+Cold-start of the plugin runtime. The gateway exposes this as
+`gateway.warming` once and then runs normally. Just wait — subsequent
+requests are fast.
+
+**`disconnected` in the status strip and nothing works**
+The openclaw gateway isn't running, or it's listening on a different
+port. Open a terminal and run `openclaw status`. If it's down, start it
+with `openclaw gateway` and wait for the connection in exuvia to flip
+to `connected` (it auto-reconnects every couple of seconds).
+
+**The app crashes or the window goes fully black after a delete or
+create**
+Try Ctrl+R first — most of these are transient render errors. If it
+recurs, open devtools (Ctrl+Shift+I) and paste the red console error.
 
 ---
 
 ## Distribution
 
-This repo *is* the distribution. To share with someone:
+This repo *is* the distribution. To share the plugin with someone:
 
 ```bash
-openclaw plugins install git:github.com/<you>/exuvia#main
+openclaw plugins install git:github.com/toprakfirat/exuvia#main
 ```
 
-openclaw handles fetch + build automatically. The desktop app is a
-standard pnpm/Electron project; until we ship an installer (next
-milestone), users clone and run `pnpm dev:electron`.
+openclaw handles the fetch and build automatically. The desktop app
+ships as a signed installer on the [Releases
+page](https://github.com/toprakfirat/exuvia/releases); to run from source
+instead, clone the repo and follow the [Install (from
+source)](#install-from-source) steps above.
 
 ---
 

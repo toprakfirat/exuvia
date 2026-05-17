@@ -29,3 +29,6 @@ app/dist-electron/
 # Claude Code local agent state — permission grants and paths that
 # don't belong in a public repo.
 .claude/
+
+# backup files
+*.gif.bak
