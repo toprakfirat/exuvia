@@ -24,7 +24,9 @@ In the app, you can create different avatars with custom GLB or FBX files with e
 > the same suit on every surface; this is the shell it wears.
 
 <p align="center">
-  <video src="https://github.com/user-attachments/assets/e4741346-5626-4f1e-a1dc-7aa116be907e" width="600" autoplay loop muted playsinline></video>
+
+https://github.com/user-attachments/assets/e4741346-5626-4f1e-a1dc-7aa116be907e
+
 </p>
 
 
