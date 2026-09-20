@@ -223,14 +223,18 @@ Output lands in `app/dist-electron/`.
 Now talk to it.
 
 <p align="center">
+  
   https://github.com/user-attachments/assets/665d6237-58b5-43fb-abe2-041229d15ea5
+
 </p>
 
 
 ## Making the Avatar cool
 
 <p align="center">
+  
  https://github.com/user-attachments/assets/bc342e49-5bc7-4cbb-8ac6-5016c149b8d0
+
 </p>
 
 
